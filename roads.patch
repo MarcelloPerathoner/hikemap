@@ -1,0 +1,28 @@
+--- ../openstreetmap-carto/roads.mss	2019-03-25 16:17:07.070193874 +0100
++++ roads.mss	2019-03-25 23:55:33.593887509 +0100
+@@ -1836,7 +1836,7 @@
+           background/line-cap: round;
+           background/line-join: round;
+           background/line-width: @footway-width-z15 + 2 * @paths-background-width;
+-          background/line-opacity: 0.4;
++          background/line-opacity: 0;
+           [zoom >= 16] {
+             background/line-width: @footway-width-z16 + 2 * @paths-background-width;
+           }
+@@ -1850,6 +1850,7 @@
+         line/line-color: @footway-fill;
+         [access = 'no'] { line/line-color: @footway-fill-noaccess; }
+         line/line-dasharray: 1,3;
++        line/line-opacity: 0;
+         line/line-join: round;
+         line/line-cap: round;
+         line/line-width: @footway-width-z14;
+@@ -2014,7 +2015,7 @@
+         line/line-dasharray: 5,4,2,4;
+         line/line-cap: round;
+         line/line-join: round;
+-        line/line-opacity: 0.8;
++        line/line-opacity: 0;
+         line/line-clip:false;
+ 
+         line/line-width: @track-width-z13;
