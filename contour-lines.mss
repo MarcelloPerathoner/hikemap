@@ -1,4 +1,4 @@
-@contour-color: #422;
+@contour-color: brown;
 
 @contour-lines-color: @contour-color;
 @contour-lines-20-color: @contour-lines-color;
@@ -13,10 +13,12 @@
 #contour-lines {
     ::lines {
         [zoom >= 15][TYPE_20 = 1][TYPE_100 = 0] {
+            line-smooth: 1;
             line-color: @contour-lines-20-color;
             line-opacity: @contour-lines-20-opacity;
         }
         [zoom >= 13][TYPE_20 = 1][TYPE_100 = 1] {
+            line-smooth: 1;
             line-color: @contour-lines-100-color;
             line-opacity: @contour-lines-100-opacity;
         }

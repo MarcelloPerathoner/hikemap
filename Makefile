@@ -1,5 +1,6 @@
 GEO_FABRIK  = https://download.geofabrik.de
 OSM_DUMP    = europe/italy/nord-est-latest.osm.pbf
+OSM_UPDATES = europe/italy/nord-est-updates/
 OSM_BASE    = $(notdir $(OSM_DUMP))
 OSM_CARTO   = ../openstreetmap-carto
 SRTM         = ../srtm-stylesheets
@@ -67,9 +68,20 @@ hikemap.xml: project.mml *.mss
 
 xml: hikemap.xml touch/hikemap.sql
 
+# url: http://hikemap.fritz.box/osm_tiles/{zoom}/{x}/{y}.png
+
 renderd: xml
 	rm -rf /var/lib/mod_tile/default
 	renderd -f -c /usr/local/etc/renderd.conf
 
 test: xml
 	./mapnik-render-image.py --size=2048x2048 -b 11.758,46.587,11.759,46.588 --scale=z16 hikemap.xml
+
+test_val: xml
+	./mapnik-render-image.py --size=2048x2048 -b 11.7994,46.5629,11.7995,46.563 --scale=z16 hikemap.xml
+
+test_ferrata: xml
+	./mapnik-render-image.py --size=2048x2048 -b 11.8254,46.5186,11.8255,46.5187 --scale=z16 hikemap.xml
+
+test_ferrata2: xml
+	./mapnik-render-image.py --size=2048x2048 -b 11.7865,46.5152,11.7866,46.5153 --scale=z16 hikemap.xml

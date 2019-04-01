@@ -1,93 +1,202 @@
-@line-color-sac-unknown: grey;
-@line-color-sac-hiking: red;
-@line-color-sac-mountain-hiking: red;
-@line-color-sac-demanding-mountain-hiking: red;
-@line-color-sac-alpine-hiking: blue;
-@line-color-sac-demanding-alpine-hiking: blue;
-@line-color-sac-difficult-alpine-hiking: blue;
+@line-color-path:         red;
+@line-color-track:        brown;
+@line-color-track-casing: #ccc;
 
-@line-dasharray-sac-unknown: none;
-@line-dasharray-sac-hiking:  none;
-@line-dasharray-sac-mountain-hiking: 8,8;
-@line-dasharray-sac-demanding-mountain-hiking: 2,8;
-@line-dasharray-sac-alpine-hiking: none;
-@line-dasharray-sac-demanding-alpine-hiking: 8,8;
-@line-dasharray-sac-difficult-alpine-hiking: 2,8;
+@line-width-path: 1;
 
-@hiking-ref-fill: #c22;
-@hiking-path-text-spacing: 500;
-@hiking-path-line-width: 1;
+@line-simplify-z14: 64;
+@line-simplify-z16: 16;
+@line-simplify-z18: 4;
+@line-simplify-algorithm: visvalingam-whyatt;
 
-#hiking-path-fill {
-    ::halo {
-        opacity: 0.2;
-        [ref != null] {
-            line-width: 10 * @hiking-path-line-width;
+@line-dasharray-sac-unknown:                   8,4,2,8;
+@line-dasharray-sac-hiking:                    none;
+@line-dasharray-sac-mountain-hiking:           8,4;
+@line-dasharray-sac-demanding-mountain-hiking: 4,8;
+@line-dasharray-sac-alpine-hiking:             none; /* hatched */
+@line-dasharray-sac-demanding-alpine-hiking:   none;
+@line-dasharray-sac-difficult-alpine-hiking:   none;
+
+@hatch-dasharray-sac: 1, 9;
+@hatch-dasharray-sac-alpine-hiking-hatch:           @hatch-dasharray-sac;
+@hatch-dasharray-sac-demanding-alpine-hiking-hatch: @hatch-dasharray-sac;
+@hatch-dasharray-sac-difficult-alpine-hiking-hatch: @hatch-dasharray-sac;
+
+@text-fill-ref:    #c22;
+@text-spacing-ref: 500;
+
+/* this comes from route = hiking */
+
+#hiking-routes-halo {
+    opacity: 0.2;
+    [route_ref != null] {
+        line-color: @line-color-path;
+
+        line-simplify-algorithm: @line-simplify-algorithm;
+        [zoom >= 14] {
+            line-width: 6 * @line-width-path + @tertiary-width-z14;
+        }
+        [zoom >= 16] {
+            line-width: 6 * @line-width-path + @tertiary-width-z16;
+        }
+        [zoom >= 18] {
+            line-width: 6 * @line-width-path + @tertiary-width-z18;
+        }
+        line-join: round;
+        line-cap: round;
+
+        line-smooth: 0;
+        line-simplify: none;
+        [highway = 'path'],
+        [highway = 'footway'],
+        [highway = 'track'],
+        [highway = 'via_ferrata'] {
+            [zoom >= 14] {
+                line-smooth: 1;
+                line-simplify: @line-simplify-z14;
+            }
+            [zoom >= 16] {
+                line-smooth: 1;
+                line-simplify: @line-simplify-z16;
+            }
+            [zoom >= 18] {
+                line-smooth: 1;
+                line-simplify: @line-simplify-z18;
+            }
+        }
+    }
+}
+
+#hiking-path-casing {
+    [highway = 'nonesuch'] {
+        [zoom >= 13] {
+            line-color: @line-color-track-casing;
+            line-opacity: 1;
             line-join: round;
             line-cap: round;
+            [zoom >= 13] {
+                line-width: @track-width-z13 + 2 * @paths-background-width;
+            }
+            [zoom >= 15] {
+                line-width: @track-width-z15 + 2 * @paths-background-width;
+            }
 
-            [sac_scale = ''] {
-                line-color:     @line-color-sac-unknown;
-                line-dasharray: @line-dasharray-sac-unknown;
+            line-smooth: 0;
+            line-simplify: none;
+            line-simplify-algorithm: @line-simplify-algorithm;
+            [zoom >= 14] {
+                line-smooth: 1;
+                line-simplify: @line-simplify-z14;
+            }
+            [zoom >= 16] {
+                line-smooth: 1;
+                line-simplify: @line-simplify-z16;
+            }
+            [zoom >= 18] {
+                line-smooth: 1;
+                line-simplify: @line-simplify-z18;
             }
             [sac_scale = 'hiking'] {
-                line-color:     @line-color-sac-hiking;
                 line-dasharray: @line-dasharray-sac-hiking;
             }
             [sac_scale = 'mountain_hiking'] {
-                line-color:     @line-color-sac-mountain-hiking;
                 line-dasharray: @line-dasharray-sac-mountain-hiking;
             }
             [sac_scale = 'demanding_mountain_hiking'] {
-                line-color:     @line-color-sac-demanding-mountain-hiking;
                 line-dasharray: @line-dasharray-sac-demanding-mountain-hiking;
             }
-            [sac_scale = 'alpine_hiking'] {
-                line-color:     @line-color-sac-alpine-hiking;
-                line-dasharray: @line-dasharray-sac-alpine-hiking;
+        }
+    }
+}
+
+#hiking-path-fill {
+    [highway = 'via_ferrata'],
+    [highway = 'footway'],
+    [highway = 'path'] {
+        line-color: @line-color-path;
+        [zoom >= 13] {
+            line-width: @footway-width-z14;
+        }
+        [zoom >= 15] {
+            line-width: @footway-width-z15;
+        }
+    }
+    [highway = 'track'] {
+        line-color: @line-color-track;
+        [zoom >= 13] {
+            line-width: @track-width-z13;
+        }
+        [zoom >= 15] {
+            line-width: @track-width-z15;
+        }
+    }
+
+    [highway = 'via_ferrata'],
+    [sac_scale = 'alpine_hiking'],
+    [sac_scale = 'demanding_alpine_hiking'],
+    [sac_scale = 'difficult_alpine_hiking'] {
+        ::hatch {
+            /* hatch the line to fake a look like crosses */
+            line-width:     7 * @line-width-path;
+            line-color:     @line-color-path;
+            line-dasharray: @hatch-dasharray-sac;
+            line-dash-offset: 4;
+
+            line-smooth: 0;
+            line-simplify: none;
+            line-simplify-algorithm: @line-simplify-algorithm;
+            [zoom >= 14] {
+                line-smooth: 1;
+                line-simplify: @line-simplify-z14;
             }
-            [sac_scale = 'demanding_alpine_hiking'] {
-                line-color:     @line-color-sac-demanding-alpine-hiking;
-                line-dasharray: @line-dasharray-sac-demanding-alpine-hiking;
+            [zoom >= 16] {
+                line-smooth: 1;
+                line-simplify: @line-simplify-z16;
             }
-            [sac_scale = 'difficult_alpine_hiking'] {
-                line-color:     @line-color-sac-difficult-alpine-hiking;
-                line-dasharray: @line-dasharray-sac-difficult-alpine-hiking;
+            [zoom >= 18] {
+                line-smooth: 1;
+                line-simplify: @line-simplify-z18;
             }
         }
     }
 
-    line-width: @hiking-path-line-width;
-    [highway = 'track'] {
-        line-width: 2 * @hiking-path-line-width;
+    line-smooth: 0;
+    line-simplify: none;
+    line-simplify-algorithm: @line-simplify-algorithm;
+    [zoom >= 14] {
+        line-smooth: 1;
+        line-simplify: @line-simplify-z14;
+    }
+    [zoom >= 16] {
+        line-smooth: 1;
+        line-simplify: @line-simplify-z16;
+    }
+    [zoom >= 18] {
+        line-smooth: 1;
+        line-simplify: @line-simplify-z18;
     }
 
+    /* FIXME: Do this in SQL */
+
     [sac_scale = ''] {
-        line-color:     @line-color-sac-unknown;
         line-dasharray: @line-dasharray-sac-unknown;
     }
     [sac_scale = 'hiking'] {
-        line-color:     @line-color-sac-hiking;
         line-dasharray: @line-dasharray-sac-hiking;
     }
     [sac_scale = 'mountain_hiking'] {
-        line-color:     @line-color-sac-mountain-hiking;
         line-dasharray: @line-dasharray-sac-mountain-hiking;
     }
     [sac_scale = 'demanding_mountain_hiking'] {
-        line-color:     @line-color-sac-demanding-mountain-hiking;
         line-dasharray: @line-dasharray-sac-demanding-mountain-hiking;
     }
     [sac_scale = 'alpine_hiking'] {
-        line-color:     @line-color-sac-alpine-hiking;
         line-dasharray: @line-dasharray-sac-alpine-hiking;
     }
     [sac_scale = 'demanding_alpine_hiking'] {
-        line-color:     @line-color-sac-demanding-alpine-hiking;
         line-dasharray: @line-dasharray-sac-demanding-alpine-hiking;
     }
     [sac_scale = 'difficult_alpine_hiking'] {
-        line-color:     @line-color-sac-difficult-alpine-hiking;
         line-dasharray: @line-dasharray-sac-difficult-alpine-hiking;
     }
 
@@ -107,29 +216,27 @@
     }
 }
 
-/* this comes from route = hiking */
-
-#hiking-text-ref {
-    text-name: "[refs]";
-    text-size: 8;
-    text-dy: 5;
+#hiking-routes-ref {
+    text-name: "[route_ref]";
+    text-size: 12;
+    text-dy: 6;
 
     [zoom >= 16] {
-        text-size: 9;
+        text-size: 14;
         text-dy: 7;
     }
     [zoom >= 17] {
-        text-size: 11;
-        text-dy: 9;
+        text-size: 16;
+        text-dy: 8;
     }
 
     text-clip: false;
-    text-fill: @hiking-ref-fill;
+    text-fill: @text-fill-ref;
     text-face-name: @book-fonts;
     text-halo-radius: @standard-halo-radius;
     text-halo-fill: @standard-halo-fill;
     text-margin: 10;
     text-placement: line;
-    text-spacing: @hiking-path-text-spacing;
-    text-vertical-alignment: middle;
+    text-spacing: @text-spacing-ref;
+    text-vertical-alignment: bottom;
 }

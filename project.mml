@@ -187,7 +187,7 @@ Layer:
       file: data/hillshade.tif
       type: gdal
     properties:
-      minzoom: 10
+      minzoom: 12
   - id: contour-lines
     geometry: linestring
     srs: "+init=epsg:4326"
@@ -195,7 +195,7 @@ Layer:
       file: data/contour-lines.json
       type: geojson
     properties:
-      minzoom: 10
+      minzoom: 13
   - id: water-lines-casing
     geometry: linestring
     <<: *extents
@@ -717,6 +717,24 @@ Layer:
         ) AS highway_area_casing
     properties:
       minzoom: 14
+  - id: hiking-routes-halo
+    geometry: linestring
+    <<: *extents
+    Datasource:
+      <<: *osm2pgsql
+      table: |-
+        hiking_routes_ref
+    properties:
+      minzoom: 15
+  - id: hiking-path-casing
+    geometry: linestring
+    <<: *extents
+    Datasource:
+      <<: *osm2pgsql
+      table: |-
+        hiking_path_fill
+    properties:
+      minzoom: 15
   - id: roads-casing
     geometry: linestring
     <<: *extents
@@ -837,6 +855,15 @@ Layer:
         ) AS highway_area_fill
     properties:
       minzoom: 14
+  - id: hiking-path-fill
+    geometry: linestring
+    <<: *extents
+    Datasource:
+      <<: *osm2pgsql
+      table: |-
+        hiking_path_fill
+    properties:
+      minzoom: 15
   - id: roads-fill
     class: access
     geometry: linestring
@@ -963,15 +990,6 @@ Layer:
           WHERE p.highway = 'turning_circle' OR p.highway = 'turning_loop'
           ORDER BY p.way, v.prio
         ) AS turning_circle_fill
-    properties:
-      minzoom: 15
-  - id: hiking-path-fill
-    geometry: linestring
-    <<: *extents
-    Datasource:
-      <<: *osm2pgsql
-      table: |-
-        hiking_path_fill
     properties:
       minzoom: 15
   - id: aerialways
@@ -1954,13 +1972,13 @@ Layer:
         ) AS roads_text_ref
     properties:
       minzoom: 13
-  - id: hiking-text-ref
+  - id: hiking-routes-ref
     geometry: linestring
     <<: *extents
     Datasource:
       <<: *osm2pgsql
       table: |-
-        hiking_text_ref
+        hiking_routes_ref
     properties:
       minzoom: 15
   - id: roads-area-text-name
