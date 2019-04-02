@@ -3,18 +3,18 @@ metatile: 2
 name: OpenHikeMap Carto
 description: A mapnik style for hiking maps, in CartoCSS
 bounds: &world
-  - 11
-  - 46
-  - 12
-  - 47
-center:
   - 11.5
-  - 46.5
+  - 46.4
+  - 12
+  - 46.8
+center:
+  - 11.75
+  - 46.6
   - 10
 format: png
 interactivity: false
-minzoom: 8
-maxzoom: 22
+minzoom: 10
+maxzoom: 18
 srs: "+proj=merc +a=6378137 +b=6378137 +lat_ts=0.0 +lon_0=0.0 +x_0=0.0 +y_0=0.0 +k=1.0 +units=m +nadgrids=@null +wktext +no_defs +over"
 
 # Various parts to be included later on
@@ -184,7 +184,7 @@ Layer:
     geometry: raster
     srs: "+init=epsg:4326"
     Datasource:
-      file: data/hillshade.tif
+      file: data/hill-shade.tif
       type: gdal
     properties:
       minzoom: 12
@@ -192,8 +192,8 @@ Layer:
     geometry: linestring
     srs: "+init=epsg:4326"
     Datasource:
-      file: data/contour-lines.json
-      type: geojson
+      file: data/contour-lines.shp
+      type: shape
     properties:
       minzoom: 13
   - id: water-lines-casing
@@ -723,7 +723,7 @@ Layer:
     Datasource:
       <<: *osm2pgsql
       table: |-
-        hiking_routes_ref
+        hiking_routes_halo_view
     properties:
       minzoom: 15
   - id: hiking-path-casing
@@ -732,7 +732,7 @@ Layer:
     Datasource:
       <<: *osm2pgsql
       table: |-
-        hiking_path_fill
+        hiking_path_casing_view
     properties:
       minzoom: 15
   - id: roads-casing
@@ -861,7 +861,7 @@ Layer:
     Datasource:
       <<: *osm2pgsql
       table: |-
-        hiking_path_fill
+        hiking_path_fill_view
     properties:
       minzoom: 15
   - id: roads-fill
@@ -1978,7 +1978,7 @@ Layer:
     Datasource:
       <<: *osm2pgsql
       table: |-
-        hiking_routes_ref
+        hiking_routes_ref_view
     properties:
       minzoom: 15
   - id: roads-area-text-name

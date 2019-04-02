@@ -5,14 +5,26 @@ OSM_BASE    = $(notdir $(OSM_DUMP))
 OSM_CARTO   = ../openstreetmap-carto
 SRTM         = ../srtm-stylesheets
 
+# the region we are interested in SRS EPSG:4326
+XMIN=11.5
+YMIN=46.40
+XMAX=12
+YMAX=46.80
+DEST_SRS      = EPSG:4326
+BBOX_SRS      = EPSG:4326
+BBOX_OSM2PSQL = $(XMIN),$(YMIN),$(XMAX),$(YMAX)
+BBOX_OGR2OGR  = $(XMIN) $(YMIN) $(XMAX) $(YMAX)
+
 PGHOST     = localhost
 PGUSER     = osm
 PGDATABASE = osm
 PGPASSWORD := $(shell apg -a 1 -m 12 -n 1 -E ":'")
 
-SU_PSQL = sudo -u postgres psql
-PSQL    = psql -d $(PGDATABASE)
-CARTO   = ~/.npm-global/bin/carto
+PSQL     = psql -d $(PGDATABASE)
+SU_PSQL  = sudo -u postgres psql
+CARTO    = ~/.npm-global/bin/carto
+OGR2OGR  = ogr2ogr
+OSM2PSQL = osm2psql
 
 DATADIR = $(CURDIR)/data
 
@@ -40,9 +52,9 @@ import: touch/import
 # --slim creates the planet_osm_rels table, and runs *much* longer (600 vs. 150 s.)
 
 touch/import: $(DATADIR)/$(OSM_BASE) hikemap.lua hikemap.style
-	osm2pgsql --multi-geometry --hstore --style hikemap.style \
+	$(OSM2PGSQL) --multi-geometry --hstore --style hikemap.style \
 		--tag-transform-script hikemap.lua --number-processes 8 \
-	    --bbox 11.5,46.25,12,46.75 \
+		--bbox $(BBOX_OSM2PSQL) \
 		--slim \
 		--host $(PGHOST) --database $(PGDATABASE) --username $(PGUSER) $(DATADIR)/$(OSM_BASE)
 	$(PSQL) -f $(OSM_CARTO)/indexes.sql
@@ -65,6 +77,25 @@ touch/hikemap.sql: hikemap.sql touch/import
 
 hikemap.xml: project.mml *.mss
 	$(CARTO) $< > $@
+
+data/hill-shade.tif: downloadService/dtm/*.tif
+	/usr/bin/gdalwarp -multi -dstalpha -overwrite \
+		-t_srs $(DEST_SRS) -te $(XMIN) $(YMIN) $(XMAX) $(YMAX) \
+		$^ $@
+
+# get ContourLines manually from http://geokatalog.buergernetz.bz.it/geokatalog/
+data/contour-lines.shp: downloadService/dataset/ContourLines_line.shp
+	$(OGR2OGR) -spat $(XMIN) $(YMIN) $(XMAX) $(YMAX) -spat_srs $(BBOX_SRS) \
+		-s_srs "EPSG:25832" -t_srs $(DEST_SRS) \
+	    -clipdst $(XMIN) $(YMIN) $(XMAX) $(YMAX) \
+		$@ $<
+
+# get HikingTrails manually from http://geokatalog.buergernetz.bz.it/geokatalog/
+# use this as data layer in the OSM iD editor
+data/hiking-trails.json: downloadService/dataset/HikingTrails_line.shp
+	$(OGR2OGR) -spat $(XMIN) $(YMIN) $(XMAX) $(YMAX) -spat_srs $(BBOX_SRS) \
+		-s_srs "EPSG:25832" -t_srs $(DEST_SRS) \
+		-f "GeoJSON" $@ $<
 
 xml: hikemap.xml touch/hikemap.sql
 

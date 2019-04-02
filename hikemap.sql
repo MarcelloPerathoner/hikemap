@@ -1,8 +1,12 @@
-DROP VIEW IF EXISTS hiking_routes_ref;
-DROP VIEW IF EXISTS planet_osm_rels_view;
-DROP VIEW IF EXISTS planet_osm_line_view;
-DROP VIEW IF EXISTS hiking_path_fill;
+DROP VIEW IF EXISTS hiking_routes_ref_view;
+DROP VIEW IF EXISTS hiking_routes_halo_view;
+DROP VIEW IF EXISTS hiking_path_casing_view;
+DROP VIEW IF EXISTS hiking_path_fill_view;
 DROP VIEW IF EXISTS local_names;
+
+DROP VIEW IF EXISTS all_routes_view      CASCADE;
+DROP VIEW IF EXISTS planet_osm_rels_view CASCADE;
+DROP VIEW IF EXISTS planet_osm_line_view CASCADE;
 
 DROP AGGREGATE IF EXISTS ref_agg (TEXT);
 
@@ -57,6 +61,8 @@ UPDATE planet_osm_rels SET tagstore = hstore (tags);
 UPDATE planet_osm_rels SET "type"   = tagstore->'type';
 UPDATE planet_osm_rels SET route    = tagstore->'route';
 
+ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_refs TEXT;
+ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_names TEXT;
 
 CREATE FUNCTION all_relations (bigint, text) RETURNS TABLE (osm_id bigint, "type" text) AS $$
 WITH RECURSIVE all_rels (osm_id) AS (
@@ -83,7 +89,7 @@ FROM planet_osm_line
 WHERE "natural" IN ('arete', 'ridge', 'valley');
 
 
-CREATE VIEW hiking_path_fill AS
+CREATE VIEW hiking_path_fill_view AS
 SELECT osm_id,
        highway,
        COALESCE (tags->'sac_scale', '') AS sac_scale,
@@ -105,6 +111,8 @@ SELECT osm_id,
        COALESCE (tags->'trail_visibility', '') AS trail_visibility,
        tracktype,
        surface,
+       route_refs,
+       route_names,
        way
 FROM planet_osm_line;
 
@@ -133,14 +141,38 @@ WHERE route.osm_id IN (SELECT osm_id FROM all_relations ($1, 'route'))
 $$ LANGUAGE SQL IMMUTABLE;
 
 
-CREATE VIEW hiking_routes_ref AS
-SELECT l.osm_id,
-       l.highway,
-       l.name,
-       l.ref,
-       l.sac_scale,
-       l.trail_visibility,
-       route_names (l.osm_id) AS route_name,
-       route_refs (l.osm_id)  AS route_ref,
-       l.way
-FROM planet_osm_line_view l;
+CREATE VIEW all_routes_view AS
+WITH RECURSIVE all_routes (osm_id) AS (
+    SELECT osm_id, rels.id AS rel_id, rels.type AS "type"
+    FROM planet_osm_line line
+      JOIN planet_osm_rels rels ON rels.parts @> ARRAY[line.osm_id]
+    WHERE line.highway != '' AND rels.route = 'hiking'
+  UNION
+    SELECT osm_id, rels.id AS rel_id, rels.type AS "type"
+    FROM all_routes line
+      JOIN planet_osm_rels rels ON rels.parts @> ARRAY[line.rel_id]
+)
+SELECT ar.osm_id, ref_agg (rels.ref) AS refs, ref_agg (name) AS names
+FROM all_routes ar
+  JOIN planet_osm_rels_view rels ON ar.rel_id = rels.osm_id
+GROUP BY ar.osm_id;
+
+
+UPDATE planet_osm_line l
+SET route_refs = ar.refs
+FROM all_routes_view ar
+WHERE l.osm_id = ar.osm_id;
+
+UPDATE planet_osm_line l
+SET route_names = ar.names
+FROM all_routes_view ar
+WHERE l.osm_id = ar.osm_id;
+
+CREATE VIEW hiking_routes_ref_view AS
+SELECT * FROM planet_osm_line_view;
+
+CREATE VIEW hiking_routes_halo_view AS
+SELECT * FROM planet_osm_line_view;
+
+CREATE VIEW hiking_path_casing_view AS
+SELECT * FROM hiking_path_fill_view;

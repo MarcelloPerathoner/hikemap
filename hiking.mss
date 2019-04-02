@@ -1,6 +1,6 @@
 @line-color-path:         red;
-@line-color-track:        brown;
-@line-color-track-casing: #ccc;
+@line-color-track-casing: @track-casing;
+@line-color-track:        @track-fill;
 
 @line-width-path: 1;
 
@@ -9,7 +9,7 @@
 @line-simplify-z18: 4;
 @line-simplify-algorithm: visvalingam-whyatt;
 
-@line-dasharray-sac-unknown:                   8,4,2,8;
+@line-dasharray-sac-unknown:                   8,4,2,4;
 @line-dasharray-sac-hiking:                    none;
 @line-dasharray-sac-mountain-hiking:           8,4;
 @line-dasharray-sac-demanding-mountain-hiking: 4,8;
@@ -25,11 +25,11 @@
 @text-fill-ref:    #c22;
 @text-spacing-ref: 500;
 
-/* this comes from route = hiking */
+/* draw a halo under highways that are hiking routes */
 
 #hiking-routes-halo {
     opacity: 0.2;
-    [route_ref != null] {
+    [route_refs != null] {
         line-color: @line-color-path;
 
         line-simplify-algorithm: @line-simplify-algorithm;
@@ -45,6 +45,9 @@
         line-join: round;
         line-cap: round;
 
+        /* these highways are drawn by ourselves in a smoothed fashion,
+           all the rest are drawn by openstreetmap in an edgy fashion.
+           the halo must follow the smooth line too. */
         line-smooth: 0;
         line-simplify: none;
         [highway = 'path'],
@@ -68,7 +71,7 @@
 }
 
 #hiking-path-casing {
-    [highway = 'nonesuch'] {
+    [highway = 'track'] {
         [zoom >= 13] {
             line-color: @line-color-track-casing;
             line-opacity: 1;
@@ -95,6 +98,10 @@
             [zoom >= 18] {
                 line-smooth: 1;
                 line-simplify: @line-simplify-z18;
+            }
+
+            [sac_scale = ''] {
+                line-dasharray: @line-dasharray-sac-unknown;
             }
             [sac_scale = 'hiking'] {
                 line-dasharray: @line-dasharray-sac-hiking;
@@ -217,7 +224,7 @@
 }
 
 #hiking-routes-ref {
-    text-name: "[route_ref]";
+    text-name: "[route_refs]";
     text-size: 12;
     text-dy: 6;
 
