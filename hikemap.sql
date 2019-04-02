@@ -1,7 +1,9 @@
 DROP VIEW IF EXISTS hiking_routes_ref_view;
 DROP VIEW IF EXISTS hiking_routes_halo_view;
-DROP VIEW IF EXISTS hiking_path_casing_view;
-DROP VIEW IF EXISTS hiking_path_fill_view;
+DROP VIEW IF EXISTS hiking_paths_casing_view;
+DROP VIEW IF EXISTS hiking_paths_fill_view;
+DROP VIEW IF EXISTS hiking_roads_text_ref;
+DROP VIEW IF EXISTS hiking_paths_text_name;
 DROP VIEW IF EXISTS local_names;
 
 DROP VIEW IF EXISTS all_routes_view      CASCADE;
@@ -10,9 +12,8 @@ DROP VIEW IF EXISTS planet_osm_line_view CASCADE;
 
 DROP AGGREGATE IF EXISTS ref_agg (TEXT);
 
-DROP FUNCTION IF EXISTS route_names;
-DROP FUNCTION IF EXISTS route_refs;
 DROP FUNCTION IF EXISTS all_relations;
+DROP FUNCTION IF EXISTS ref_to_string;
 DROP FUNCTION IF EXISTS refs_to_string;
 DROP FUNCTION IF EXISTS add_refs;
 DROP FUNCTION IF EXISTS array_distinct;
@@ -36,6 +37,11 @@ $$ LANGUAGE sql IMMUTABLE;
 
 CREATE FUNCTION array_distinct(anyarray) RETURNS anyarray AS $$
   SELECT array_agg(DISTINCT x) FROM unnest($1) t(x);
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE FUNCTION ref_to_string(TEXT) RETURNS TEXT AS $$
+  SELECT array_to_string (array_agg (x ORDER BY natsort (x)), ' - ')
+    FROM unnest(array_distinct (string_to_array ($1, ';'))) t(x);
 $$ LANGUAGE SQL IMMUTABLE;
 
 CREATE FUNCTION add_refs(TEXT [], TEXT) RETURNS TEXT[] AS $$
@@ -89,7 +95,7 @@ FROM planet_osm_line
 WHERE "natural" IN ('arete', 'ridge', 'valley');
 
 
-CREATE VIEW hiking_path_fill_view AS
+CREATE VIEW hiking_paths_fill_view AS
 SELECT osm_id,
        highway,
        COALESCE (tags->'sac_scale', '') AS sac_scale,
@@ -106,7 +112,7 @@ CREATE VIEW planet_osm_line_view AS
 SELECT osm_id,
        highway,
        COALESCE (name, array_to_string (ARRAY["name:lld", "name:de", "name:it"], ' - ')) as name,
-       COALESCE ("ref:hiking", ref, '') AS ref,
+       COALESCE ("ref:hiking", ref, substr (name, 1, 3), '') AS ref,
        COALESCE (tags->'sac_scale', '') AS sac_scale,
        COALESCE (tags->'trail_visibility', '') AS trail_visibility,
        tracktype,
@@ -121,24 +127,10 @@ CREATE VIEW planet_osm_rels_view AS
 SELECT id AS osm_id,
        COALESCE (tagstore->'name', array_to_string (
          ARRAY[tagstore->'name:lld', tagstore->'name:de', tagstore->'name:it'], ' - ')) as name,
-       COALESCE (tagstore->'ref:hiking', tagstore->'ref', '') AS ref,
+       COALESCE (tagstore->'ref:hiking', tagstore->'ref', substr (tagstore->'name', 1, 3), '') AS ref,
        parts
 FROM planet_osm_rels
 WHERE route = 'hiking';
-
-
-CREATE FUNCTION route_refs (bigint) RETURNS TEXT AS $$
-SELECT ref_agg (route.ref)
-FROM planet_osm_rels_view route
-WHERE route.osm_id IN (SELECT osm_id FROM all_relations ($1, 'route'))
-$$ LANGUAGE SQL IMMUTABLE;
-
-
-CREATE FUNCTION route_names (bigint) RETURNS TEXT AS $$
-SELECT ref_agg (route.name)
-FROM planet_osm_rels_view route
-WHERE route.osm_id IN (SELECT osm_id FROM all_relations ($1, 'route'))
-$$ LANGUAGE SQL IMMUTABLE;
 
 
 CREATE VIEW all_routes_view AS
@@ -169,10 +161,22 @@ FROM all_routes_view ar
 WHERE l.osm_id = ar.osm_id;
 
 CREATE VIEW hiking_routes_ref_view AS
-SELECT * FROM planet_osm_line_view;
+SELECT route_refs, (ST_Dump (ST_LineMerge (ST_Collect (way)))).geom as way
+FROM planet_osm_line_view
+GROUP BY route_refs;
 
 CREATE VIEW hiking_routes_halo_view AS
 SELECT * FROM planet_osm_line_view;
 
-CREATE VIEW hiking_path_casing_view AS
-SELECT * FROM hiking_path_fill_view;
+CREATE VIEW hiking_paths_casing_view AS
+SELECT * FROM hiking_paths_fill_view;
+
+CREATE VIEW hiking_roads_text_ref AS
+SELECT way, highway, ref AS refs
+FROM planet_osm_line_view
+WHERE ref != '' AND ref_to_string (ref) != route_refs;
+
+CREATE VIEW hiking_paths_text_name AS
+SELECT way, highway, name AS names
+FROM planet_osm_line_view
+WHERE name != '' AND ref_to_string (name) != route_refs;

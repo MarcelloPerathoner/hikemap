@@ -35,6 +35,7 @@ all: xml
 prereq:
 	sudo apt-get install apg osm2pgsql sed wget \
 		fonts-noto-cjk fonts-noto-hinted fonts-noto-unhinted fonts-hanazono ttf-unifont
+	sudo echo "d /run/renderd 1755 renderd_user renderd_user" > /etc/tmpfiles.d/renderd.conf
 
 create_db:
 	$(SU_PSQL) -c "CREATE ROLE $(PGUSER) LOGIN PASSWORD '$(PGPASSWORD)'"
