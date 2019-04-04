@@ -12,6 +12,8 @@ DROP VIEW IF EXISTS planet_osm_line_view CASCADE;
 
 DROP AGGREGATE IF EXISTS ref_agg (TEXT);
 
+DROP FUNCTION IF EXISTS altilenimetry;
+DROP FUNCTION IF EXISTS altimetry;
 DROP FUNCTION IF EXISTS all_relations;
 DROP FUNCTION IF EXISTS ref_to_string;
 DROP FUNCTION IF EXISTS refs_to_string;
@@ -19,7 +21,7 @@ DROP FUNCTION IF EXISTS add_refs;
 DROP FUNCTION IF EXISTS array_distinct;
 DROP FUNCTION IF EXISTS natsort;
 
-CREATE OR REPLACE FUNCTION natsort (text) RETURNS text[] AS
+CREATE FUNCTION natsort (text) RETURNS text[] AS
 $$
   SELECT array_agg (
     CASE
@@ -66,6 +68,9 @@ ALTER TABLE planet_osm_rels ADD COLUMN IF NOT EXISTS route TEXT;
 UPDATE planet_osm_rels SET tagstore = hstore (tags);
 UPDATE planet_osm_rels SET "type"   = tagstore->'type';
 UPDATE planet_osm_rels SET route    = tagstore->'route';
+
+ALTER DATABASE osm SET postgis.gdal_enabled_drivers TO 'GTiff PNG JPEG';
+ALTER DATABASE osm SET postgis.enable_outdb_rasters = True;
 
 ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_refs TEXT;
 ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_names TEXT;
@@ -180,3 +185,45 @@ CREATE VIEW hiking_paths_text_name AS
 SELECT way, highway, name AS names
 FROM planet_osm_line_view
 WHERE name != '' AND ref_to_string (name) != route_refs;
+
+CREATE FUNCTION altimetry (geometry (LineString, 3857)) RETURNS geometry (LineString, 3857) AS $$
+WITH
+  points3d AS
+    (SELECT ST_MakePoint (ST_X (p.geom), ST_Y (p.geom), ST_Value (dtm.rast, 1, p.geom)) AS geom
+    FROM (SELECT (ST_DumpPoints ($1)).geom) AS p
+    JOIN raster_dtm dtm ON (ST_Intersects (dtm.rast, p.geom)))
+  SELECT ST_MakeLine (geom) FROM points3d;
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE FUNCTION altilenimetry (geometry (LineString, 3857)) RETURNS geometry (LineString, 3857) AS $$
+WITH
+  -- points and indices
+  points2d AS
+    (SELECT (dp).geom AS geom,
+            (dp).path[1] AS index
+     FROM (SELECT ST_DumpPoints ($1) AS dp) AS q),
+
+  -- add altimetry
+  points3d AS
+    (SELECT ST_MakePoint (ST_X (p.geom), ST_Y (p.geom), ST_Value (dtm.rast, 1, p.geom)) AS geom,
+            p.index
+    FROM points2d p
+    JOIN raster_dtm dtm ON (ST_Intersects (dtm.rast, p.geom))),
+
+  -- add cumulative distance from origin
+  points4d AS
+    (SELECT ST_MakePoint (
+                ST_X (p.geom),
+                ST_Y (p.geom),
+                ST_Z (p.geom),
+                ST_Length2D (ST_MakeLine (p.geom) OVER (ORDER BY p.index))
+                ) AS geom
+     FROM points3d p)
+
+SELECT ST_MakeLine (geom) FROM points4d;
+$$ LANGUAGE SQL IMMUTABLE;
+
+DROP VIEW pg_hill_shade_view;
+CREATE VIEW pg_hill_shade_view AS
+SELECT ST_Hillshade (rast, 1, '8BUI') AS rast
+FROM raster_dtm;

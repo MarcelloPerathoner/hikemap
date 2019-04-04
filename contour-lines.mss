@@ -10,21 +10,26 @@
 @contour-text-opacity: 0.5;
 @contour-text-spacing: 500;
 
-#contour-lines {
+#contour-lines-25 {
     ::lines {
-        [zoom >= 15][TYPE_20 = 1][TYPE_100 = 0] {
+        [zoom >= 15] {
             line-smooth: 1;
             line-color: @contour-lines-20-color;
             line-opacity: @contour-lines-20-opacity;
         }
-        [zoom >= 13][TYPE_20 = 1][TYPE_100 = 1] {
+    }
+}
+
+#contour-lines-100 {
+    ::lines {
+        [zoom >= 13] {
             line-smooth: 1;
             line-color: @contour-lines-100-color;
             line-opacity: @contour-lines-100-opacity;
         }
     }
     ::figures {
-        [zoom >= 13][TYPE_20 = 1][TYPE_100 = 1] {
+        [zoom >= 13] {
             text-name: "[ELEVATION]";
             text-size: 8;
             text-dy: 0;
