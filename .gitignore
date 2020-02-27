@@ -1,9 +1,14 @@
 *~
 TODO
+node_modules/
 data/
 downloadService/
+pgimport/
 image.png
 symbols/
 touch/
 hikemap.xml
 roads.mss
+__pycache__/
+client/build/
+*.log

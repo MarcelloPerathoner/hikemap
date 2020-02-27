@@ -1,0 +1,227 @@
+--- ../openstreetmap-carto/project.mml	2020-02-24 21:39:01.873860673 +0100
++++ project.mml	2020-02-25 00:24:04.983242371 +0100
+@@ -1,20 +1,20 @@
+ scale: 1
+ metatile: 2
+-name: OpenStreetMap Carto
+-description: A general-purpose OpenStreetMap mapnik style, in CartoCSS
++name: OpenHikeMap Carto
++description: A mapnik style for hiking maps, in CartoCSS
+ bounds: &world
+-  - -180
+-  - -85.05112877980659
+-  - 180
+-  - 85.05112877980659
++  - 11.5
++  - 46.4
++  - 12
++  - 46.8
+ center:
+-  - 0
+-  - 0
+-  - 4
++  - 11.75
++  - 46.6
++  - 10
+ format: png
+ interactivity: false
+-minzoom: 0
+-maxzoom: 22
++minzoom: 10
++maxzoom: 18
+ srs: "+proj=merc +a=6378137 +b=6378137 +lat_ts=0.0 +lon_0=0.0 +x_0=0.0 +y_0=0.0 +k=1.0 +units=m +nadgrids=@null +wktext +no_defs +over"
+ 
+ # Various parts to be included later on
+@@ -30,29 +30,39 @@
+     srs: "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+   osm2pgsql: &osm2pgsql
+     type: "postgis"
+-    dbname: "gis"
++    dbname: "osm"
+     key_field: ""
+     geometry_field: "way"
+     extent: "-20037508,-20037508,20037508,20037508"
++  osm2pgsql_raster: &osm2pgsql_raster
++    type: "postgis"
++    dbname: "osm"
++    key_field: ""
++    raster_field: "rast"
++    extent: "-20037508,-20037508,20037508,20037508"
+ 
+ Stylesheet:
+-  - style.mss
+-  - fonts.mss
+-  - shapefiles.mss
+-  - landcover.mss
+-  - water.mss
+-  - water-features.mss
+-  - road-colors-generated.mss
++  - ../openstreetmap-carto/style.mss
++  - ../openstreetmap-carto/fonts.mss
++  - ../openstreetmap-carto/shapefiles.mss
++  - ../openstreetmap-carto/landcover.mss
++  - ../openstreetmap-carto/water.mss
++  - ../openstreetmap-carto/water-features.mss
++  - hill-shading.mss
++  - contour-lines.mss
++  - ../openstreetmap-carto/road-colors-generated.mss
+   - roads.mss
+-  - power.mss
+-  - placenames.mss
+-  - buildings.mss
+-  - stations.mss
+-  - amenity-points.mss
+-  - ferry-routes.mss
+-  - aerialways.mss
+-  - admin.mss
+-  - addressing.mss
++  - ../openstreetmap-carto/power.mss
++  - ../openstreetmap-carto/placenames.mss
++  - ../openstreetmap-carto/buildings.mss
++  - ../openstreetmap-carto/stations.mss
++  - ../openstreetmap-carto/amenity-points.mss
++  - ../openstreetmap-carto/ferry-routes.mss
++  - ../openstreetmap-carto/aerialways.mss
++  - ../openstreetmap-carto/admin.mss
++  - ../openstreetmap-carto/addressing.mss
++  - local-names.mss
++  - hiking.mss
+ Layer:
+   - id: landcover-low-zoom
+     geometry: polygon
+@@ -342,6 +352,30 @@
+         ) AS water_barriers_poly
+     properties:
+       minzoom: 13
++  - id: hill-shade
++    geometry: raster
++    srs: "+init=epsg:3857"
++    Datasource:
++      file: data/hill-shade.tif
++      type: gdal
++    properties:
++      minzoom: 12
++  - id: contour-lines-25
++    geometry: linestring
++    srs: "+init=epsg:3857"
++    Datasource:
++      file: data/contour-lines-25.shp
++      type: shape
++    properties:
++      minzoom: 15
++  - id: contour-lines-100
++    geometry: linestring
++    srs: "+init=epsg:3857"
++    Datasource:
++      file: data/contour-lines-100.shp
++      type: shape
++    properties:
++      minzoom: 13
+   - id: springs
+     geometry: point
+     <<: *extents
+@@ -689,6 +723,24 @@
+         ) AS highway_area_casing
+     properties:
+       minzoom: 14
++  - id: hiking-routes-halo
++    geometry: linestring
++    <<: *extents
++    Datasource:
++      <<: *osm2pgsql
++      table: |-
++        hiking_routes_halo_view
++    properties:
++      minzoom: 15
++  - id: hiking-paths-casing
++    geometry: linestring
++    <<: *extents
++    Datasource:
++      <<: *osm2pgsql
++      table: |-
++        hiking_paths_casing_view
++    properties:
++      minzoom: 15
+   - id: roads-casing
+     geometry: linestring
+     <<: *extents
+@@ -817,6 +869,15 @@
+         ) AS highway_area_fill
+     properties:
+       minzoom: 14
++  - id: hiking-paths-fill
++    geometry: linestring
++    <<: *extents
++    Datasource:
++      <<: *osm2pgsql
++      table: |-
++        hiking_paths_fill_view
++    properties:
++      minzoom: 15
+   - id: roads-fill
+     geometry: linestring
+     <<: *extents
+@@ -1234,6 +1295,15 @@
+         ) AS state_names
+     properties:
+       minzoom: 4
++  - id: local-names
++    geometry: linestring
++    <<: *extents
++    Datasource:
++      <<: *osm2pgsql
++      table: |-
++        local_names
++    properties:
++      minzoom: 12
+   - id: placenames-medium
+     geometry: point
+     <<: *extents
+@@ -1304,9 +1374,10 @@
+               WHEN place = 'hamlet' THEN 5
+               WHEN place = 'quarter' THEN 6
+               WHEN place = 'neighbourhood' THEN 7
+-              WHEN place = 'isolated_dwelling' THEN 8
+-              WHEN place = 'farm' THEN 9
+-              WHEN place = 'square' THEN 10
++              WHEN place = 'locality' THEN 8
++              WHEN place = 'isolated_dwelling' THEN 9
++              WHEN place = 'farm' THEN 10
++              WHEN place = 'square' THEN 11
+             END ASC, length(name) DESC, name
+         ) AS placenames_small
+     properties:
+@@ -1771,6 +1842,33 @@
+         ) AS roads_text_ref
+     properties:
+       minzoom: 13
++  - id: hiking-routes-ref
++    geometry: linestring
++    <<: *extents
++    Datasource:
++      <<: *osm2pgsql
++      table: |-
++        hiking_routes_ref_view
++    properties:
++      minzoom: 15
++  - id: hiking-routes-name
++    geometry: linestring
++    <<: *extents
++    Datasource:
++      <<: *osm2pgsql
++      table: |-
++        hiking_routes_name_view
++    properties:
++      minzoom: 15
++  - id: hiking-roads-text-ref
++    geometry: linestring
++    <<: *extents
++    Datasource:
++      <<: *osm2pgsql
++      table: |-
++        hiking_roads_text_ref
++    properties:
++      minzoom: 13
+   - id: roads-area-text-name
+     geometry: point
+     <<: *extents

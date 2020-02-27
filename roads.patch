@@ -1,6 +1,6 @@
---- ../openstreetmap-carto/roads.mss	2019-03-25 16:17:07.070193874 +0100
-+++ roads.mss	2019-04-01 23:35:46.879212015 +0200
-@@ -1836,7 +1836,7 @@
+--- ../openstreetmap-carto/roads.mss	2020-02-24 21:39:01.877860683 +0100
++++ roads.mss	2020-02-25 00:26:52.551596783 +0100
+@@ -1857,7 +1857,7 @@
            background/line-cap: round;
            background/line-join: round;
            background/line-width: @footway-width-z15 + 2 * @paths-background-width;
@@ -9,7 +9,7 @@
            [zoom >= 16] {
              background/line-width: @footway-width-z16 + 2 * @paths-background-width;
            }
-@@ -1850,6 +1850,7 @@
+@@ -1871,6 +1871,7 @@
          line/line-color: @footway-fill;
          [access = 'no'] { line/line-color: @footway-fill-noaccess; }
          line/line-dasharray: 1,3;
@@ -17,7 +17,7 @@
          line/line-join: round;
          line/line-cap: round;
          line/line-width: @footway-width-z14;
-@@ -1994,7 +1995,7 @@
+@@ -2015,7 +2016,7 @@
        [zoom >= 15] {
          /* The white casing that you mainly see against forests and other dark features */
          #roads-fill[zoom >= 15] {
@@ -26,7 +26,7 @@
            background/line-color: @track-casing;
            background/line-join: round;
            background/line-cap: round;
-@@ -2014,7 +2015,7 @@
+@@ -2035,7 +2036,7 @@
          line/line-dasharray: 5,4,2,4;
          line/line-cap: round;
          line/line-join: round;

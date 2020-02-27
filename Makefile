@@ -1,94 +1,153 @@
+# where are the dependencies installed?
+OSM_CARTO   = ../openstreetmap-carto
+SRTM        = ../srtm-stylesheets
+
+# where do we get planet files, DTMs, etc.?
 GEO_FABRIK  = https://download.geofabrik.de
 OSM_DUMP    = europe/italy/nord-est-latest.osm.pbf
 OSM_UPDATES = europe/italy/nord-est-updates/
 OSM_BASE    = $(notdir $(OSM_DUMP))
-OSM_CARTO   = ../openstreetmap-carto
-SRTM        = ../srtm-stylesheets
 DTM_TIFFS   := $(wildcard downloadService/downloadService/DTM-2p5m_*.tif)
+
+DATADIR     = $(CURDIR)/data
+
+# the input database clipped to the region of interest
+OSM_CLIPPED = $(DATADIR)/clipped.osm
 
 # http://gis2.provinz.bz.it/geobrowser/?project=geobrowser_pro&view=geobrowser_pro_atlas-b&locale=de
 
-OSM_SRS       = EPSG:3857     # The SRS used by OpenStreetMap
-BZIT_SRS      = EPSG:25832    # ETRS89 / UTM zone 32N used by provinz.bz.it
-WGS_SRS       = EPSG:4326     # WGS84
+SRS_OSM       = EPSG:3857     # The SRS used by OpenStreetMap
+SRS_BZIT      = EPSG:25832    # ETRS89 / UTM zone 32N used by provinz.bz.it
+SRS_WGS       = EPSG:4326     # WGS84
 
 # the region we are interested in WGS coords
-XMIN=11.5
+XMIN=11.45
 YMIN=46.40
-XMAX=12
+XMAX=12.15
 YMAX=46.80
+BBOX_WGS      = $(XMIN) $(YMIN) $(XMAX) $(YMAX)
 BBOX_OSM2PSQL = $(XMIN),$(YMIN),$(XMAX),$(YMAX)
-BBOX_GDAL     = $(XMIN) $(YMIN) $(XMAX) $(YMAX)
-BBOX_SRS      = $(WGS_SRS)
 
-# from gdalinfo
+# the region we are interested in OSM coords (from gdalinfo)
 XMIN_OSM=1280174.144
 XMAX_OSM=1335833.890
 YMIN_OSM=5844682.851
 YMAX_OSM=5909489.864
 BBOX_OSM=$(XMIN_OSM) $(YMIN_OSM) $(XMAX_OSM) $(YMAX_OSM)
 
-PGHOST     = localhost
-PGUSER     = osm
-PGDATABASE = osm
-PGPASSWORD := $(shell apg -a 1 -m 12 -n 1 -E ":'")
+PGHOST      = localhost
+PGUSER      = osm
 
-PSQL      = psql -d $(PGDATABASE)
-SU_PSQL   = sudo -u postgres psql
+# the osm2pgsql schema (used by openstreetmap-carto)
+# https://wiki.openstreetmap.org/wiki/Osm2pgsql/schema
+PGDATABASE  = osm
+PGPASSWORD  := $(shell apg -a 1 -m 32 -M ncl -n 1)
+
+# we also import the pgsnapshot schema
+# https://wiki.openstreetmap.org/wiki/Osmosis/Detailed_Usage_0.47#PostGIS_Tasks_.28Snapshot_Schema.29
+SNAP_DB     = osm
+SNAP_SCHEMA = snapshot
+
+PSQL      = psql -h $(PGHOST) -U $(PGUSER)
+PSQL_OSM  = $(PSQL) -d $(PGDATABASE)
+PSQL_SNAP = $(PSQL) -d $(SNAP_DB) -c 'SET search_path TO $(SNAP_SCHEMA),public'
+PSQL_SNAP_SCRIPT = $(PSQL_SNAP) -f /usr/share/doc/osmosis/examples/pgsnapshot
+
+PSQL_SU   = sudo -u postgres psql
 CARTO     = ~/.npm-global/bin/carto
 OGR2OGR   = ogr2ogr
 OSM2PGSQL = osm2pgsql
 GDALWARP  = /usr/bin/gdalwarp -multi -wo NUM_THREADS=ALL_CPUS -overwrite -of GTiff
 
-DATADIR = $(CURDIR)/data
+BZIT_GEOJSON = $(OGR2OGR) -spat $(BBOX_WGS) -spat_srs $(SRS_WGS) \
+			-s_srs $(SRS_BZIT) -t_srs $(SRS_WGS) \
+			-clipdst $(BBOX_WGS) -lco "SIGNIFICANT_FIGURES=10" \
+			-f "GeoJSON" -dim XY
 
 MSS := $(wilcard *.mss)
 
 all: xml
 
+psql:
+	$(PSQL) -d $(PGDATABASE)
+
+import: touch/import_dem touch/hikemap.sql
+
 prereq:
-	sudo apt-get install apg osm2pgsql sed wget \
+	sudo apt-get install apg osmosis osm2pgsql sed wget \
 		fonts-noto-cjk fonts-noto-hinted fonts-noto-unhinted fonts-hanazono ttf-unifont
+	sudo pip3 install osmapi
 	sudo echo "d /run/renderd 1755 renderd_user renderd_user" > /etc/tmpfiles.d/renderd.conf
 
-create_db:
-	$(SU_PSQL) -c "CREATE ROLE $(PGUSER) LOGIN PASSWORD '$(PGPASSWORD)'"
-	echo "$(PGHOST):*:$(PGDATABASE):$(PGUSER):$(PGPASSWORD)" >> ~/.pgpass
-	$(SU_PSQL) -c "CREATE DATABASE $(PGDATABASE) OWNER $(PGUSER)"
-	$(SU_PSQL) -d $(PGDATABASE) -c "CREATE EXTENSION postgis; CREATE EXTENSION hstore"
-
 clean_db:
-	$(SU_PSQL) -c "DROP DATABASE $(PGDATABASE)"
-	$(SU_PSQL) -c "DROP ROLE $(PGUSER)"
-	sed -i.bak "/^$(PGHOST):\*:$(PGDATABASE):$(PGUSER):/d" ~/.pgpass
+	$(PSQL_SU) -c "DROP DATABASE IF EXISTS $(PGDATABASE)"
+	$(PSQL_SU) -c "DROP ROLE IF EXISTS $(PGUSER)"
+	sed -i.bak "/^$(PGHOST):\*:\*:$(PGUSER):/d" ~/.pgpass
 
-import: touch/import
+create_db: clean_db
+	# things to do as user postgres
+	$(PSQL_SU) -c "CREATE ROLE $(PGUSER) LOGIN PASSWORD '$(PGPASSWORD)'"
+	echo "$(PGHOST):*:*:$(PGUSER):$(PGPASSWORD)" >> ~/.pgpass
+	$(PSQL_SU) -c "CREATE DATABASE $(PGDATABASE) OWNER $(PGUSER)"
+	$(PSQL_SU) -c "ALTER DATABASE $(PGDATABASE) SET postgis.gdal_enabled_drivers TO 'GTiff PNG JPEG'"
+	$(PSQL_SU) -c "ALTER DATABASE $(PGDATABASE) SET postgis.enable_outdb_rasters = True"
+	$(PSQL_SU) -d $(PGDATABASE) -c "CREATE EXTENSION postgis; CREATE EXTENSION hstore"
+	# Fix ERROR:  type "raster" does not exist
+	$(PSQL_SU) -d $(PGDATABASE) < /usr/share/postgresql/12/contrib/postgis-3.0/rtpostgis.sql
+	$(PSQL_SU) -d $(PGDATABASE) < /usr/share/postgresql/12/contrib/postgis-3.0/topology.sql
 
-# --slim creates the planet_osm_rels table, and runs *much* longer (600 vs. 150 s.)
+touch/hikemap.sql: hikemap.sql touch/osm2pgsql touch/osmosis
+	$(PSQL_OSM) -f $<
+	touch $@
 
-touch/import: $(DATADIR)/$(OSM_BASE) hikemap.lua hikemap.style
+# clip the planet file to the region of interest
+$(OSM_CLIPPED): $(DATADIR)/$(OSM_BASE)
+	osmosis --read-pbf-fast $(DATADIR)/$(OSM_BASE) workers=8 --log-progress \
+		--bounding-box left=$(XMIN) right=$(XMAX) bottom=$(YMIN) top=$(YMAX) \
+		completeRelations=yes cascadingRelations=yes \
+		--write-xml $@
+
+# load into postgres using the openstreetmap-carto database scheme.  this scheme
+# is highly optimized for the mapnik renderer but no good for anything else.
+touch/osm2pgsql: $(OSM_CLIPPED) hikemap.lua hikemap.style
 	$(OSM2PGSQL) --multi-geometry --hstore --style hikemap.style \
 		--tag-transform-script hikemap.lua --number-processes 8 \
-		--bbox $(BBOX_OSM2PSQL) \
-		--slim \
-		--host $(PGHOST) --database $(PGDATABASE) --username $(PGUSER) $(DATADIR)/$(OSM_BASE)
-	$(PSQL) -f $(OSM_CARTO)/indexes.sql
-	touch touch/import
+		--host $(PGHOST) --database $(PGDATABASE) --username $(PGUSER) $<
+	$(PSQL_OSM) -f $(OSM_CARTO)/indexes.sql
+	touch $@
+
+# load into postgres using a sensible (osmosis snapshot) database scheme.  this
+# scheme has all tables in a relational way
+# See: https://wiki.openstreetmap.org/wiki/Osmosis/PostGIS_Setup
+touch/osmosis: $(OSM_CLIPPED)
+	mkdir -p pgimport
+	$(PSQL) -d $(SNAP_DB) -c "DROP SCHEMA IF EXISTS $(SNAP_SCHEMA) CASCADE"
+	$(PSQL) -d $(SNAP_DB) -c "CREATE SCHEMA IF NOT EXISTS $(SNAP_SCHEMA)"
+	$(PSQL_SNAP_SCRIPT)_schema_0.6.sql
+	$(PSQL_SNAP_SCRIPT)_schema_0.6_action.sql
+	$(PSQL_SNAP_SCRIPT)_schema_0.6_bbox.sql
+	$(PSQL_SNAP_SCRIPT)_schema_0.6_linestring.sql
+	osmosis --read-xml $< --log-progress \
+		--write-pgsql-dump pgimport enableBboxBuilder=yes enableLinestringBuilder=yes
+	cd pgimport; $(PSQL_SNAP_SCRIPT)_load_0.6.sql; cd ..
+	rm pgimport/*
+	touch $@
 
 download:
 	wget -N -P $(DATADIR) $(GEO_FABRIK)/$(OSM_DUMP)
-	$(OSM_CARTO)/scripts/get-shapefiles.py -d $(DATADIR)
+	$(OSM_CARTO)/scripts/get-shapefiles.py -n -d $(DATADIR)
 
-roads-diff:
-	-diff -U 3 $(OSM_CARTO)/roads.mss roads.mss > roads.patch
+build-patch:
+	-diff -U 3 $(OSM_CARTO)/project.mml project.mml > project.patch
+	-diff -U 3 $(OSM_CARTO)/roads.mss   roads.mss   > roads.patch
+
+project.mml: $(OSM_CARTO)/project.mml project.patch
+	cp $(OSM_CARTO)/project.mml .
+	patch < project.patch
 
 roads.mss: $(OSM_CARTO)/roads.mss roads.patch
 	cp $(OSM_CARTO)/roads.mss .
 	patch < roads.patch
-
-touch/hikemap.sql: hikemap.sql touch/import
-	$(PSQL) -f $<
-	touch $@
 
 hikemap.xml: project.mml *.mss
 	$(CARTO) $< > $@
@@ -101,17 +160,19 @@ hikemap.xml: project.mml *.mss
 # -tr 5 5 avoids artefacts
 data/dtm-warped.tif: $(DTM_TIFFS)
 	$(GDALWARP) -r lanczos -rcs -order 3 -tr 5 5 \
-		-t_srs $(OSM_SRS) -te $(BBOX_GDAL) -te_srs $(BBOX_SRS) $^ /tmp/tmp.tif
+		-t_srs $(SRS_OSM) -te $(BBOX_WGS) -te_srs $(SRS_WGS) $^ /tmp/tmp.tif
 	gdal_calc.py -A /tmp/tmp.tif --outfile=$@ --calc="A*(A>100)*(A<3500)" --NoDataValue=0 --overwrite
 
-dem: hill-shade contour-lines touch/import_dem
+dem: hill-shade contour-lines import-dem
 
 hill-shade: data/hill-shade.tif
 
+contour-lines: data/contour-lines-25.shp data/contour-lines-100.shp
+
+import-dem: touch/import_dem
+
 data/hill-shade.tif: data/dtm-warped.tif
 	gdaldem hillshade $< $@
-
-contour-lines: data/contour-lines-25.shp data/contour-lines-100.shp
 
 # build contour lines and simplify them
 data/contour-lines-100.shp: data/dtm-warped.tif
@@ -123,34 +184,47 @@ data/contour-lines-25.shp: data/dtm-warped.tif
 	$(OGR2OGR) $@ /tmp/cont025.shp -simplify 2.5
 
 # import into Postgres for altimetry
-touch/import_dem: data/dtm-warped.tiff
-	raster2pgsql -s $(OSM_SRS) -d -C -I -M -t 100x100 $^ public.raster_dtm | $(PSQL) -q
-	touch touch/import_dem
+touch/import_dem: data/dtm-warped.tif
+	raster2pgsql -s $(SRS_OSM) -d -C -I -M -t 100x100 $^ public.raster_dtm | $(PSQL_OSM) -q
+	touch $@
 
-# obsolete: get hill shades manually from http://geokatalog.buergernetz.bz.it/geokatalog/
-data/hillshade.tif: downloadService/dtm/*.tif
-	$(GDALWARP) -t_srs $(OSM_SRS) -te $(BBOX_GDAL) -te_srs $(BBOX_SRS) -dstalpha $^ $@
-
-# obsolete: get ContourLines manually from http://geokatalog.buergernetz.bz.it/geokatalog/
-data/contourlines.shp: downloadService/dataset/ContourLines_line.shp
-	$(OGR2OGR) -spat $(BBOX_OSM) -spat_srs $(OSM_SRS) -s_srs $(BZIT_SRS) -t_srs $(OSM_SRS) \
-		-clipdst $(BBOX_OSM) \
-		$@ $<
+data: data/hiking-trails.json \
+	data/mtb-tours.json       \
+	data/bicycle-lanes.json   \
+	data/ski-pistes.json      \
+	data/landuse-plan.json
 
 # get HikingTrails manually from http://geokatalog.buergernetz.bz.it/geokatalog/
-# use this as data layer in the OSM iD editor
+# use this as data layer in JOSM
 data/hiking-trails.json: downloadService/dataset/HikingTrails_line.shp
-	$(OGR2OGR) -spat $(BBOX_GDAL) -spat_srs $(BBOX_SRS) \
-		-s_srs $(BZIT_SRS) -t_srs $(WGS_SRS) \
-		-f "GeoJSON" $@ $<
+	$(BZIT_GEOJSON) -nlt LINESTRING $@ $<
+
+# get SkiPistes manually from http://geokatalog.buergernetz.bz.it/geokatalog/
+# use this as data layer in JOSM
+data/ski-pistes.json: downloadService/dataset/SkiPistes_polygon.shp
+	$(BZIT_GEOJSON) -nlt POLYGON $@ $<
+
+# get LandUsePlan manually from http://geokatalog.buergernetz.bz.it/geokatalog/
+# use this as data layer in JOSM
+data/landuse-plan.json: downloadService/dataset/LandUsePlan_Lines_line.shp
+	$(BZIT_GEOJSON) -nlt LINESTRING $@ $<
+
+data/mtb-tours.json: downloadService/dataset/MountainbikeTours_line.shp
+	$(BZIT_GEOJSON) -nlt LINESTRING $@ $<
+
+data/bicycle-lanes.json: downloadService/dataset/BicycleLanes_line.shp
+	$(BZIT_GEOJSON) -nlt LINESTRING $@ $<
 
 xml: hikemap.xml touch/hikemap.sql
 
+# renderd for use as JOSM background imagery
 # url: http://hikemap.fritz.box/osm_tiles/{zoom}/{x}/{y}.png
-
 renderd: xml
 	rm -rf /var/lib/mod_tile/default
-	renderd -f -c /usr/local/etc/renderd.conf
+	renderd -f -c ./renderd.conf
+
+server: xml
+	cd server ; make server
 
 test: xml
 	./mapnik-render-image.py --size=2048x2048 -b 11.758,46.587,11.759,46.588 --scale=z16 hikemap.xml

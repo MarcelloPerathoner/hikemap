@@ -1,4 +1,5 @@
 DROP VIEW IF EXISTS hiking_routes_ref_view;
+DROP VIEW IF EXISTS hiking_routes_name_view;
 DROP VIEW IF EXISTS hiking_routes_halo_view;
 DROP VIEW IF EXISTS hiking_paths_casing_view;
 DROP VIEW IF EXISTS hiking_paths_fill_view;
@@ -6,15 +7,16 @@ DROP VIEW IF EXISTS hiking_roads_text_ref;
 DROP VIEW IF EXISTS hiking_paths_text_name;
 DROP VIEW IF EXISTS local_names;
 
-DROP VIEW IF EXISTS all_routes_view      CASCADE;
-DROP VIEW IF EXISTS planet_osm_rels_view CASCADE;
+DROP VIEW IF EXISTS all_routes_view CASCADE;
 DROP VIEW IF EXISTS planet_osm_line_view CASCADE;
+DROP VIEW IF EXISTS relations_of;
+DROP VIEW IF EXISTS route_lines;
+DROP VIEW IF EXISTS check_routes;
 
 DROP AGGREGATE IF EXISTS ref_agg (TEXT);
 
 DROP FUNCTION IF EXISTS altilenimetry;
 DROP FUNCTION IF EXISTS altimetry;
-DROP FUNCTION IF EXISTS all_relations;
 DROP FUNCTION IF EXISTS ref_to_string;
 DROP FUNCTION IF EXISTS refs_to_string;
 DROP FUNCTION IF EXISTS add_refs;
@@ -47,7 +49,8 @@ CREATE FUNCTION ref_to_string(TEXT) RETURNS TEXT AS $$
 $$ LANGUAGE SQL IMMUTABLE;
 
 CREATE FUNCTION add_refs(TEXT [], TEXT) RETURNS TEXT[] AS $$
-  SELECT $1 || string_to_array (regexp_replace ($2, 'AV(\d+)', '\1⃤'), ';');
+  -- SELECT $1 || string_to_array (regexp_replace ($2, 'AV(\d+)', '\1⃤'), ';');
+  SELECT $1 || string_to_array ($2, ';');
 $$ LANGUAGE SQL IMMUTABLE;
 
 CREATE FUNCTION refs_to_string(TEXT[]) RETURNS TEXT AS $$
@@ -62,32 +65,8 @@ CREATE AGGREGATE ref_agg (TEXT) (
   finalfunc = refs_to_string
 );
 
-ALTER TABLE planet_osm_rels ADD COLUMN IF NOT EXISTS tagstore hstore;
-ALTER TABLE planet_osm_rels ADD COLUMN IF NOT EXISTS "type" TEXT;
-ALTER TABLE planet_osm_rels ADD COLUMN IF NOT EXISTS route TEXT;
-UPDATE planet_osm_rels SET tagstore = hstore (tags);
-UPDATE planet_osm_rels SET "type"   = tagstore->'type';
-UPDATE planet_osm_rels SET route    = tagstore->'route';
-
-ALTER DATABASE osm SET postgis.gdal_enabled_drivers TO 'GTiff PNG JPEG';
-ALTER DATABASE osm SET postgis.enable_outdb_rasters = True;
-
 ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_refs TEXT;
 ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_names TEXT;
-
-CREATE FUNCTION all_relations (bigint, text) RETURNS TABLE (osm_id bigint, "type" text) AS $$
-WITH RECURSIVE all_rels (osm_id) AS (
-    SELECT rels.id AS osm_id, rels.type AS "type"
-    FROM planet_osm_rels rels
-    WHERE rels.parts @> ARRAY[$1]
-  UNION
-    SELECT rels.id AS osm_id, rels.type AS "type"
-    FROM all_rels, planet_osm_rels rels
-    WHERE rels.parts @> ARRAY[all_rels.osm_id]
-)
-SELECT osm_id, "type" FROM all_rels;
-$$ LANGUAGE SQL IMMUTABLE;
-
 
 CREATE VIEW local_names AS
 SELECT osm_id,
@@ -128,47 +107,49 @@ SELECT osm_id,
 FROM planet_osm_line;
 
 
-CREATE VIEW planet_osm_rels_view AS
-SELECT id AS osm_id,
-       COALESCE (tagstore->'name', array_to_string (
-         ARRAY[tagstore->'name:lld', tagstore->'name:de', tagstore->'name:it'], ' - ')) as name,
-       COALESCE (tagstore->'ref:hiking', tagstore->'ref', substr (tagstore->'name', 1, 3), '') AS ref,
-       parts
-FROM planet_osm_rels
-WHERE route = 'hiking';
+CREATE VIEW relations_of AS
+SELECT *
+FROM snapshot.relation_members mn
+    JOIN snapshot.relations r ON mn.relation_id = r.id;
 
 
 CREATE VIEW all_routes_view AS
-WITH RECURSIVE all_routes (osm_id) AS (
-    SELECT osm_id, rels.id AS rel_id, rels.type AS "type"
+WITH RECURSIVE all_routes (way_id, rel_id, rel_tags) AS (
+    -- select all lines in some relation
+    SELECT line.osm_id AS way_id, r.id AS rel_id, r.tags AS rel_tags
     FROM planet_osm_line line
-      JOIN planet_osm_rels rels ON rels.parts @> ARRAY[line.osm_id]
-    WHERE line.highway != '' AND rels.route = 'hiking'
+      JOIN relations_of r ON r.member_id = line.osm_id
   UNION
-    SELECT osm_id, rels.id AS rel_id, rels.type AS "type"
-    FROM all_routes line
-      JOIN planet_osm_rels rels ON rels.parts @> ARRAY[line.rel_id]
+    -- add all super relations
+    SELECT ar.way_id, r.id AS rel_id, r.tags AS rel_tags
+    FROM all_routes ar
+      JOIN relations_of r ON r.member_id = ar.rel_id
 )
-SELECT ar.osm_id, ref_agg (rels.ref) AS refs, ref_agg (name) AS names
+SELECT way_id,
+       ref_agg (rel_tags->'ref') AS refs,
+       ref_agg (rel_tags->'name') AS names,
+       array_agg (rel_id) AS rel_ids
 FROM all_routes ar
-  JOIN planet_osm_rels_view rels ON ar.rel_id = rels.osm_id
-GROUP BY ar.osm_id;
+WHERE rel_tags->'route' = 'hiking'
+GROUP BY way_id;
 
 
 UPDATE planet_osm_line l
-SET route_refs = ar.refs
+SET route_refs = ar.refs, route_names = ar.names
 FROM all_routes_view ar
-WHERE l.osm_id = ar.osm_id;
-
-UPDATE planet_osm_line l
-SET route_names = ar.names
-FROM all_routes_view ar
-WHERE l.osm_id = ar.osm_id;
+WHERE l.osm_id = ar.way_id;
 
 CREATE VIEW hiking_routes_ref_view AS
 SELECT route_refs, (ST_Dump (ST_LineMerge (ST_Collect (way)))).geom as way
 FROM planet_osm_line_view
+WHERE route_refs IS NOT NULL
 GROUP BY route_refs;
+
+CREATE VIEW hiking_routes_name_view AS
+SELECT route_names, (ST_Dump (ST_LineMerge (ST_Collect (way)))).geom as way
+FROM planet_osm_line_view
+WHERE route_names IS NOT NULL
+GROUP BY route_names;
 
 CREATE VIEW hiking_routes_halo_view AS
 SELECT * FROM planet_osm_line_view;
@@ -186,22 +167,25 @@ SELECT way, highway, name AS names
 FROM planet_osm_line_view
 WHERE name != '' AND ref_to_string (name) != route_refs;
 
-CREATE FUNCTION altimetry (geometry (LineString, 3857)) RETURNS geometry (LineString, 3857) AS $$
+-- returns altimetry of a linestring, elevation in m in Z
+CREATE FUNCTION altimetry (geometry (LineString)) RETURNS geometry (LineString, 3857) AS $$
 WITH
   points3d AS
     (SELECT ST_MakePoint (ST_X (p.geom), ST_Y (p.geom), ST_Value (dtm.rast, 1, p.geom)) AS geom
-    FROM (SELECT (ST_DumpPoints ($1)).geom) AS p
+    FROM (SELECT (ST_DumpPoints (ST_Transform ($1, 3857))).geom) AS p
     JOIN raster_dtm dtm ON (ST_Intersects (dtm.rast, p.geom)))
   SELECT ST_MakeLine (geom) FROM points3d;
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE FUNCTION altilenimetry (geometry (LineString, 3857)) RETURNS geometry (LineString, 3857) AS $$
+-- returns altimetry and walked distance of a linestring,
+-- elevation in m in Z, distance in m in M
+CREATE FUNCTION altilenimetry (geometry (LineString)) RETURNS geometry (LineString, 3857) AS $$
 WITH
   -- points and indices
   points2d AS
     (SELECT (dp).geom AS geom,
             (dp).path[1] AS index
-     FROM (SELECT ST_DumpPoints ($1) AS dp) AS q),
+     FROM (SELECT ST_DumpPoints (ST_Transform ($1, 3857)) AS dp) AS q),
 
   -- add altimetry
   points3d AS
@@ -223,7 +207,23 @@ WITH
 SELECT ST_MakeLine (geom) FROM points4d;
 $$ LANGUAGE SQL IMMUTABLE;
 
-DROP VIEW pg_hill_shade_view;
-CREATE VIEW pg_hill_shade_view AS
-SELECT ST_Hillshade (rast, 1, '8BUI') AS rast
-FROM raster_dtm;
+
+CREATE VIEW check_routes AS
+SELECT r.id                  AS rel,
+       r.tags->'route'       AS route,
+       r.tags->'ref'         AS "ref",
+       r.tags->'name'        AS "name",
+       r.tags->'network'     AS network,
+       r.tags->'osmc:symbol' AS symbol
+FROM snapshot.relations r
+WHERE r.tags->'route' IN ('hiking', 'bicycle', 'mtb', 'piste', 'bus');
+
+
+-- to check if route segments are ordered
+CREATE VIEW route_lines AS
+SELECT mn.relation_id AS rel,
+       ST_AsGeoJSON (ST_Collect (w.linestring ORDER BY sequence_id)) AS lines
+FROM snapshot.relation_members mn
+    JOIN snapshot.ways w ON w.id = mn.member_id
+WHERE mn.member_role = ''
+GROUP BY rel;

@@ -29,7 +29,8 @@
 
 #hiking-routes-halo {
     opacity: 0.2;
-    [route_refs != null] {
+    [route_refs != null],
+    [route_names != null] {
         line-color: @line-color-path;
 
         line-simplify-algorithm: @line-simplify-algorithm;
@@ -232,6 +233,28 @@
     }
     [zoom >= 18] {
         text-size: 16;
+    }
+
+    text-clip: false;
+    text-fill: @text-fill-ref;
+    text-face-name: @book-fonts;
+    text-halo-radius: 2 * @standard-halo-radius;
+    text-halo-fill: @standard-halo-fill;
+    text-placement: line;
+    text-spacing: @text-spacing-ref;
+    text-label-position-tolerance: 30;
+    text-vertical-alignment: middle;
+}
+
+#hiking-routes-name {
+    text-name: "[route_names]";
+
+    text-size: 10;
+    [zoom >= 16] {
+        text-size: 12;
+    }
+    [zoom >= 18] {
+        text-size: 14;
     }
 
     text-clip: false;
