@@ -1,13 +1,19 @@
 # include ../Variables.mak
 
-WEBPACK := node_modules/.bin/webpack --no-color
-WEBPACK_DEV_SERVER := node_modules/.bin/webpack-dev-server --no-color
-ESLINT := node_modules/.bin/eslint -f unix
-STYLELINT := node_modules/.bin/stylelint --custom-formatter ./stylelint-unix-formatter.js
+NODE := ../node_modules/.bin
+
+WEBPACK            := $(NODE)/webpack --no-color
+WEBPACK_DEV_SERVER := $(NODE)/webpack-dev-server --no-color
+ESLINT             := $(NODE)/eslint -f unix
+STYLELINT          := $(NODE)/stylelint -f unix
 
 .PHONY: build build-production
 
-AUX := build/index.html build/api.conf.js
+AUX := dist/api.conf.js
+
+dist/api.conf.js: src/api.conf.js
+	mkdir -p dist
+	cp $< $@
 
 build: $(AUX)
 	$(WEBPACK) --config webpack.dev.js

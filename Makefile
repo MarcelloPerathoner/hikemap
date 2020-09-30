@@ -54,7 +54,7 @@ PSQL_SNAP = $(PSQL) -d $(SNAP_DB) -c 'SET search_path TO $(SNAP_SCHEMA),public'
 PSQL_SNAP_SCRIPT = $(PSQL_SNAP) -f /usr/share/doc/osmosis/examples/pgsnapshot
 
 PSQL_SU   = sudo -u postgres psql
-CARTO     = ~/.npm-global/bin/carto
+CARTO     = node_modules/carto/bin/carto
 OGR2OGR   = ogr2ogr
 OSM2PGSQL = osm2pgsql
 GDALWARP  = /usr/bin/gdalwarp -multi -wo NUM_THREADS=ALL_CPUS -overwrite -of GTiff
@@ -64,7 +64,7 @@ BZIT_GEOJSON = $(OGR2OGR) -spat $(BBOX_WGS) -spat_srs $(SRS_WGS) \
 			-clipdst $(BBOX_WGS) -lco "SIGNIFICANT_FIGURES=10" \
 			-f "GeoJSON" -dim XY
 
-MSS := $(wilcard *.mss)
+MSS := $(wilcard style/*.mss)
 
 all: xml
 
@@ -111,7 +111,7 @@ $(OSM_CLIPPED): $(DATADIR)/$(OSM_BASE)
 # is highly optimized for the mapnik renderer but no good for anything else.
 touch/osm2pgsql: $(OSM_CLIPPED) hikemap.lua hikemap.style
 	$(OSM2PGSQL) --multi-geometry --hstore --style hikemap.style \
-		--tag-transform-script hikemap.lua --number-processes 8 \
+		--tag-transform-script $(OSM_CARTO)/openstreetmap-carto.lua --number-processes 8 \
 		--host $(PGHOST) --database $(PGDATABASE) --username $(PGUSER) $<
 	$(PSQL_OSM) -f $(OSM_CARTO)/indexes.sql
 	touch $@
@@ -138,19 +138,20 @@ download:
 	$(OSM_CARTO)/scripts/get-shapefiles.py -n -d $(DATADIR)
 
 build-patch:
-	-diff -U 3 $(OSM_CARTO)/project.mml project.mml > project.patch
-	-diff -U 3 $(OSM_CARTO)/roads.mss   roads.mss   > roads.patch
+	-diff -U 3 $(OSM_CARTO)/project.mml     project.mml     > project.patch
+	-diff -U 3 $(OSM_CARTO)/style/roads.mss style/roads.mss > roads.patch
 
 project.mml: $(OSM_CARTO)/project.mml project.patch
 	cp $(OSM_CARTO)/project.mml .
 	patch < project.patch
 
-roads.mss: $(OSM_CARTO)/roads.mss roads.patch
-	cp $(OSM_CARTO)/roads.mss .
-	patch < roads.patch
+#style/roads.mss: $(OSM_CARTO)/style/roads.mss roads.patch
+#	cp $(OSM_CARTO)/style/roads.mss style/
+#	patch < roads.patch
 
-hikemap.xml: project.mml *.mss
-	$(CARTO) $< > $@
+hikemap.xml: project.mml style/*.mss
+	$(CARTO) $< > $@.tmp
+	mv $@.tmp $@
 
 # convert to 16bit tiffs
 %.tiff: %.tif

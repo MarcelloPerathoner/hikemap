@@ -8,7 +8,7 @@ import logging
 import time
 
 import flask
-from flask import current_app, Flask
+from flask import current_app, Flask, request
 from werkzeug.routing import Map, Rule, Submount
 
 import common
@@ -18,8 +18,7 @@ from config import args, init_logging
 from db_tools import PostgreSQLEngine
 
 from tile_server     import tile_app
-from geo_server      import geo_app
-
+from geo_server      import geo_app, RouteTypeConverter
 
 class Config (object):
     APPLICATION_HOST  = 'localhost'
@@ -51,6 +50,7 @@ def create_app (Config):
     app = Flask (__name__)
 
     app.config.from_object (Config)
+    app.url_map.converters['route_type'] = RouteTypeConverter
 
     app.config.from_pyfile (Config.CONFIG_FILE)
 
@@ -84,9 +84,12 @@ if __name__ == "__main__":
 
     @app.after_request
     def add_headers (response):
-        response.headers['Access-Control-Allow-Origin'] = app.config['CORS_ALLOW_ORIGIN']
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type' # allow application/json
+        origin = request.headers.get ('Origin')
+        if origin and (origin == app.config['CORS_ALLOW_ORIGIN'] or
+                       origin.startswith ('http://localhost')):
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type' # allow application/json
         response.headers['Server'] = 'Jetty 0.8.15'
         return response
 
@@ -101,7 +104,7 @@ if __name__ == "__main__":
         app.config['APPLICATION_HOST'],
         app.config['APPLICATION_PORT'],
         app,
-        use_reloader=app.config['USE_RELOADER'],
-        use_debugger=app.config['USE_DEBUGGER'],
-        extra_files=[Config.CONFIG_FILE],
+        use_reloader = app.config.get ('USE_RELOADER', False),
+        use_debugger = app.config.get ('USE_DEBUGGER', False),
+        extra_files  = app.config.get ('EXTRA_FILES', []),
     )

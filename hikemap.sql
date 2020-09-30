@@ -67,6 +67,7 @@ CREATE AGGREGATE ref_agg (TEXT) (
 
 ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_refs TEXT;
 ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_names TEXT;
+ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_ids INT[];
 
 CREATE VIEW local_names AS
 SELECT osm_id,
@@ -82,8 +83,10 @@ WHERE "natural" IN ('arete', 'ridge', 'valley');
 CREATE VIEW hiking_paths_fill_view AS
 SELECT osm_id,
        highway,
-       COALESCE (tags->'sac_scale', '') AS sac_scale,
+       COALESCE (tags->'sac_scale', '')        AS sac_scale,
        COALESCE (tags->'trail_visibility', '') AS trail_visibility,
+       bicycle,
+       horse,
        tracktype,
        surface,
        way
@@ -94,6 +97,7 @@ ORDER BY sac_scale;
 
 CREATE VIEW planet_osm_line_view AS
 SELECT osm_id,
+       way,
        highway,
        COALESCE (name, array_to_string (ARRAY["name:lld", "name:de", "name:it"], ' - ')) as name,
        COALESCE ("ref:hiking", ref, substr (name, 1, 3), '') AS ref,
@@ -103,7 +107,7 @@ SELECT osm_id,
        surface,
        route_refs,
        route_names,
-       way
+       route_ids
 FROM planet_osm_line;
 
 
@@ -128,22 +132,40 @@ WITH RECURSIVE all_routes (way_id, rel_id, rel_tags) AS (
 SELECT way_id,
        ref_agg (rel_tags->'ref') AS refs,
        ref_agg (rel_tags->'name') AS names,
-       array_agg (rel_id) AS rel_ids
+       array_agg (rel_id ORDER BY rel_id) AS rel_ids
 FROM all_routes ar
 WHERE rel_tags->'route' = 'hiking'
 GROUP BY way_id;
 
+CREATE VIEW snapshot.way_super_routes_view AS
+WITH RECURSIVE super_routes (way_id, relation_id) AS (
+    -- selects lines that are in some relation
+    SELECT w.id AS way_id, rm.*
+    FROM snapshot.ways w
+      JOIN snapshot.relation_members rm
+        ON (rm.member_id, rm.member_type) = (w.id, 'W')
+  UNION
+    -- add all super relations
+    SELECT sr.way_id, rm.*
+    FROM super_routes sr
+      JOIN snapshot.relation_members rm
+        ON (rm.member_id, rm.member_type) = (sr.relation_id, 'R')
+)
+SELECT * FROM super_routes;
+
 
 UPDATE planet_osm_line l
-SET route_refs = ar.refs, route_names = ar.names
+SET route_refs = ar.refs,
+    route_names = ar.names,
+    route_ids = ar.rel_ids
 FROM all_routes_view ar
 WHERE l.osm_id = ar.way_id;
 
 CREATE VIEW hiking_routes_ref_view AS
-SELECT route_refs, (ST_Dump (ST_LineMerge (ST_Collect (way)))).geom as way
+SELECT route_ids, route_names, route_refs, (ST_Dump (ST_LineMerge (ST_Collect (way)))).geom as way
 FROM planet_osm_line_view
 WHERE route_refs IS NOT NULL
-GROUP BY route_refs;
+GROUP BY route_refs, route_names, route_ids;
 
 CREATE VIEW hiking_routes_name_view AS
 SELECT route_names, (ST_Dump (ST_LineMerge (ST_Collect (way)))).geom as way
@@ -169,42 +191,38 @@ WHERE name != '' AND ref_to_string (name) != route_refs;
 
 -- returns altimetry of a linestring, elevation in m in Z
 CREATE FUNCTION altimetry (geometry (LineString)) RETURNS geometry (LineString, 3857) AS $$
-WITH
-  points3d AS
-    (SELECT ST_MakePoint (ST_X (p.geom), ST_Y (p.geom), ST_Value (dtm.rast, 1, p.geom)) AS geom
-    FROM (SELECT (ST_DumpPoints (ST_Transform ($1, 3857))).geom) AS p
-    JOIN raster_dtm dtm ON (ST_Intersects (dtm.rast, p.geom)))
-  SELECT ST_MakeLine (geom) FROM points3d;
+WITH points3d AS (
+    SELECT ST_MakePoint (ST_X (p.geom), ST_Y (p.geom), ST_Value (dtm.rast, 1, p.geom)) AS geom
+    FROM
+      (SELECT (ST_DumpPoints (ST_Transform ($1, 3857))).geom) AS p
+      JOIN raster_dtm dtm ON (ST_Intersects (dtm.rast, p.geom))
+    )
+SELECT ST_MakeLine (geom) FROM points3d;
 $$ LANGUAGE SQL IMMUTABLE;
 
 -- returns altimetry and walked distance of a linestring,
 -- elevation in m in Z, distance in m in M
-CREATE FUNCTION altilenimetry (geometry (LineString)) RETURNS geometry (LineString, 3857) AS $$
-WITH
-  -- points and indices
-  points2d AS
-    (SELECT (dp).geom AS geom,
-            (dp).path[1] AS index
-     FROM (SELECT ST_DumpPoints (ST_Transform ($1, 3857)) AS dp) AS q),
+CREATE OR REPLACE FUNCTION altilenimetry (geometry (LineString)) RETURNS geometry (LineString, 3857) AS $$
 
-  -- add altimetry
-  points3d AS
-    (SELECT ST_MakePoint (ST_X (p.geom), ST_Y (p.geom), ST_Value (dtm.rast, 1, p.geom)) AS geom,
-            p.index
-    FROM points2d p
-    JOIN raster_dtm dtm ON (ST_Intersects (dtm.rast, p.geom))),
+WITH points3d AS (
+    SELECT ST_MakePoint (
+      ST_X (p.geom),
+      ST_Y (p.geom),
+      ST_Value (dtm.rast, 1, p.geom)) AS geom
+    FROM
+      (SELECT (ST_DumpPoints (ST_Transform ($1, 3857))).geom) AS p
+      JOIN raster_dtm dtm ON (ST_Intersects (dtm.rast, p.geom))
+    ),
 
   -- add cumulative distance from origin
-  points4d AS
+  points AS
     (SELECT ST_MakePoint (
-                ST_X (p.geom),
-                ST_Y (p.geom),
-                ST_Z (p.geom),
-                ST_Length2D (ST_MakeLine (p.geom) OVER (ORDER BY p.index))
-                ) AS geom
+                ST_Length2D (ST_MakeLine (p.geom) OVER (ROWS UNBOUNDED PRECEDING)),
+                ST_Z (p.geom)
+                ) AS pt
      FROM points3d p)
 
-SELECT ST_MakeLine (geom) FROM points4d;
+SELECT ST_MakeLine (pt) FROM points;
 $$ LANGUAGE SQL IMMUTABLE;
 
 

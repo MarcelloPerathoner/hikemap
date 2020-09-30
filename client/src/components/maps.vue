@@ -1,16 +1,37 @@
 <template>
-  <div class="maps-vm"
-       @mss-tooltip-open="on_mss_tooltip_open"
-       @destroy-card="on_destroy_map_popup">
+  <div class="maps-vm">
+    <div id="content">
+      <slippy-map ref="map" @click.native="on_click" />
 
-    <toolbar :toolbar="toolbar" class="maps-vm-toolbar px-2 py-2" ref="tb">
-    </toolbar>
-
-    <slippy-map :toolbar="toolbar" :style="`top: ${toolbar_height}px`" />
-
-    <div class="info-panels">
-      <map-popup v-for="d in info_panels" :key="d.card_id" :d="d" />
+      <div class="info-panels">
+        <map-popup v-for="d in info_panels" :key="d.card_id" :d="d" />
+      </div>
     </div>
+
+    <b-sidebar id="sidebar-right" :title="sidebar.tags.ref" right shadow
+               :no-close-on-route-change="true" v-model="sidebar.is_open">
+      <div class="px-3 py-2">
+        <table>
+          <tr v-for="[key, value] of Object.entries (sidebar.tags)">
+            <th>{{ key }}</th>
+            <td>{{ value }}</td>
+          </tr>
+        </table>
+        <div id="chart" />
+      </div>
+    </b-sidebar>
+
+    <header @mss-tooltip-open="on_mss_tooltip_open"
+            @destroy-card="on_destroy_map_popup">
+      <nav ref="tb" class="maps-vm-toolbar">
+        <b-button-toolbar class="justify-content-between">
+          <b-dropdown lazy split text="Edit" class="m-2" @click="edit_map_with ('iD')">
+            <b-dropdown-item v-for="b in editors" :key="b.id"
+                             @click="edit_map_with (b.id)">{{ b.text }}</b-dropdown-item>
+          </b-dropdown>
+        </b-button-toolbar>
+      </nav>
+    </header>
 
   </div>
 </template>
@@ -25,33 +46,61 @@
 
 import { mapGetters } from 'vuex'
 
-import $        from 'jquery';
-import * as d3  from 'd3';
-import _        from 'lodash';
+import _         from 'lodash';
+import axios     from 'axios';
+import { Chart } from 'frappe-charts';
 
-import map      from 'map.vue';
+import map      from './map.vue';
 
-import toolbar        from 'widgets/toolbar.vue';
-import button_group   from 'widgets/button_group.vue';
-import layer_selector from 'widgets/layer_selector.vue';
-import map_popup      from 'map_popup.vue';
+const EDITORS = [
+    {
+        'id'    : 'iD',
+        'text'  : 'Edit with iD',
+        'href'  : 'https://www.openstreetmap.org/edit?editor=id',
+        'local' : false,
+    },
+    {
+        'id'    : 'Potlach2',
+        'text'  : 'Edit with Potlatch 2',
+        'href'  : 'https://www.openstreetmap.org/edit?editor=potlatch2',
+        'local' : false,
+    },
+    {
+        'id'    : 'JOSM',
+        'text'  : 'Edit with JOSM',
+        'href'  : 'http://localhost:8111/load_and_zoom',
+        'local' : true,
+    },
+];
+
+/*
+  import toolbar        from './widgets/toolbar.vue';
+  import button_group   from './widgets/button_group.vue';
+  import layer_selector from './widgets/layer_selector.vue';
+  import map_popup      from './map_popup.vue';
+
+  'toolbar'        : toolbar,
+  'map-popup'      : map_popup,
+  'button-group'   : button_group,
+  'layer-selector' : layer_selector,
+*/
 
 export default {
     'components' : {
         'slippy-map'     : map,
-        'toolbar'        : toolbar,
-        'map-popup'      : map_popup,
-        'button-group'   : button_group,
-        'layer-selector' : layer_selector,
     },
     'data'  : function () {
         return {
             'toolbar' : {
                 'layers_shown' : ['hikemap'],
             },
-            'info_panels'    : [],
-            'next_id'        : 1,
-            'toolbar_height' : 50,
+            'info_panels' : [],
+            'next_id'     : 1,
+            'editors'     : EDITORS,
+            'sidebar'     : {
+                'tags'    : {},
+                'is_open' : false,
+            },
         };
     },
     'computed' : {
@@ -66,6 +115,43 @@ export default {
         },
     },
     'methods' : {
+        on_click (event) {
+            console.log (event);
+            if (event.hikemap) {
+                const p = event.hikemap;
+                this.sidebar.tags    = p.tags;
+                this.sidebar.is_open = true;
+                axios.get (api_base_url + 'geo/altimetry/' + p.geo_id)
+                    .then (function (response) {
+                        const geometry = response.data.features[0].geometry;
+                        const data = {
+                            'labels'   : [],
+                            'datasets' : [
+                                { 'values' : [], },
+                            ],
+                        }
+                        if (geometry) {
+                            const coords = geometry.coordinates;
+                            data.labels = coords.map (x => x[0]);
+                            data.datasets[0].values = coords.map (x => x[1]);
+                        }
+                        new Chart ("#chart", {
+                            data   : data,
+                            type   : 'line',
+                            height : 180,
+                            colors : ['red'],
+                            lineOptions : {
+                                regionFill : 1,
+                                hideDots   : 1,
+                                spline     : 1,
+                                xIsSeries  : true,
+                            },
+                        });
+                    })
+                    .catch (function (error) {
+                    });
+            }
+        },
         on_mss_tooltip_open (event) {
             // event.detail.data == the d3 data on the SVG element
             const d = _.cloneDeep (event.detail.data);
@@ -76,21 +162,36 @@ export default {
             const card_id = event.detail.data;
             this.info_panels = this.info_panels.filter (d => d.card_id !== card_id)
         },
-        on_resize () {
-            this.toolbar_height = $ (this.$refs.tb.$el).outerHeight ();
+        edit_map_with (id) {
+            for (const item of EDITORS) {
+                if (item.id === id) {
+                    if (item.local) {
+                        const b = this.$refs.map.map.getBounds ();
+                        const josm = 'http://127.0.0.1:8111/load_and_zoom';
+                        const params = {
+                            'left'   : b.getWest (),
+                            'right'  : b.getEast (),
+                            'top'    : b.getNorth (),
+                            'bottom' : b.getSouth (),
+                        };
+                        axios.get (item.href, { 'params' : params })
+                            .catch (function (error) {
+                                alert ('Could not open JOSM: ' + error);
+                            });
+                    } else {
+                        window.location = item.href + this.$route.hash;
+                    }
+                    break;
+                }
+            }
         },
-    },
-    mounted () {
-        const vm = this;
-        window.addEventListener ('resize', vm.on_resize);
-        vm.on_resize ();
     },
 };
 </script>
 
 <style lang="scss">
 /* maps.vue */
-@import "bootstrap-custom";
+@import "~/src/css/bootstrap-custom";
 
 div.maps-vm {
 
@@ -99,8 +200,19 @@ div.maps-vm {
         width: 30em;
     }
 
-    .maps-vm-toolbar {
-        background: $card-cap-bg;
+    nav.maps-vm-toolbar {
+        position: absolute;
+        top: 0;
+        z-index: 10000;
+        background: transparent; // $card-cap-bg;
     }
+
+    #content {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 100%;
+    }
+
 }
 </style>

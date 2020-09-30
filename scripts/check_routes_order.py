@@ -22,7 +22,7 @@ area of interest."""
 
 CHUNKS = {
       959876 : 2, # LS64 Kastelruth - St. Ulrich
-      960769 : 2, # A22 Brennerautobahn (reason: gap in Database extract)
+      # 960769 : 2, # A22 Brennerautobahn (reason: gap in Database extract)
 }
 """Expected no. of chunks for routes that for some reason have more than one
 chunk."""
@@ -86,20 +86,23 @@ def stops_ok (ways, relation_id):
                 if node_id == next_stop.node_id:
                     direction = 'backward' if reverse else 'forward'
                     if next_stop.tags.get ('direction', direction) != direction:
-                        print ('Stop "%s" in route %d has wrong direction' %
+                        print ('  Stop "%s" in route %d has wrong direction' %
                                (next_stop.tags.get ('name', 'unnnamed'), rel_id))
                         errors += 1
+                    #if next_stop.tags.get ('highway') != 'bus_stop':
+                    #    print ('  Stop "%s" in route %d has no highway=bus_stop' %
+                    #           (next_stop.tags.get ('name', 'unnnamed'), rel_id))
                     # stop reached, on to the next one
                     next_stop = next (stops_iter)
 
     except StopIteration:
         return errors == 0 # all stops reached
 
-    print ('Stop "%s" in route %d not reached' % (next_stop.tags.get ('name', 'unnnamed'), rel_id))
+    print ('  Stop "%s" in route %d not reached' % (next_stop.tags.get ('name', 'unnnamed'), rel_id))
     return False
 
 
-def check_route (rel, g):
+def check_route (rel, g, report = False):
     rel_id = rel['rel_id']
     route  = rel['route']
 
@@ -111,29 +114,29 @@ def check_route (rel, g):
         backward = [ w for w in g if w.role in ('', 'backward') ]
         found_chunks = ways_ok (forward, route)
         forward_ok   = found_chunks == expected_chunks
-        if not forward_ok:
+        if report and not forward_ok:
             print ('Road {route} route {ref} ({rel_id}) "{name}" forward in DISORDER ({fc}/{ec})'.format (
                 fc = found_chunks, ec = expected_chunks, **rel))
         found_chunks = ways_ok (reversed (backward), route)
         backward_ok = found_chunks == expected_chunks
-        if not backward_ok:
+        if report and not backward_ok:
             print ('Road {route} route {ref} ({rel_id}) "{name}" backward in DISORDER ({fc}/{ec})'.format (
                 fc = found_chunks, ec = expected_chunks, **rel))
         ok = forward_ok and backward_ok
     elif route == 'bus':
         ways = [ w for w in g if w.role == '' ]
-        ok = ways_ok (ways, route) == expected_chunks and stops_ok (ways, rel_id)
-        if not ok:
+        found_chunks = ways_ok (ways, route)
+        ok = found_chunks == expected_chunks and stops_ok (ways, rel_id)
+        if report and not ok:
             print ('Bus {route} route {ref} ({rel_id}) "{name}" in DISORDER ({fc}/{ec})'.format (
                 fc = found_chunks, ec = expected_chunks, **rel))
-            faulty_relations.add (rel_id)
     else:
         ways = [ w for w in g if w.role == '' ]
-        ok = ways_ok (ways, route) == expected_chunks
-        if not ok:
+        found_chunks = ways_ok (ways, route)
+        ok = found_chunks == expected_chunks
+        if report and not ok:
             print ('{route} route {ref} ({rel_id}) "{name}" in DISORDER ({fc}/{ec})'.format (
                 fc = found_chunks, ec = expected_chunks, **rel))
-            faulty_relations.add (rel_id)
 
     return ok
 
@@ -190,8 +193,7 @@ for rel_id, group in itertools.groupby (rows, operator.attrgetter ('rel_id')):
     # faulty relation from the api and check again
 
     try:
-        api = connect.api
-        rfull = api.RelationFull (rel_id)
+        rfull = connect.api.RelationFull (rel_id)
     except osmapi.ElementDeletedApiError:
         # route was deleted, nothing to report
         break
@@ -217,12 +219,16 @@ for rel_id, group in itertools.groupby (rows, operator.attrgetter ('rel_id')):
             )))
 
     rel = rels[rel_id]
+    tags = rel['tag']
     ok = check_route ({
         'rel_id' : rel_id,
-        'route'  : rel['tag']['route'],
-        'ref'    : rel['tag']['ref'],
-        'name'   : rel['tag']['name'],
-    }, members)
+        'route'  : tags.get ('route'),
+        'ref'    : tags.get ('ref'),
+        'name'   : tags.get ('name'),
+    }, members, report = True)
+
+    if not ok:
+        faulty_relations.add (rel_id)
 
 
 print ('Checked relations: %d' % checked_relations)

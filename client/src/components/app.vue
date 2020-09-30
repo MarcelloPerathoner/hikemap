@@ -19,14 +19,18 @@ import _            from 'lodash';
 import * as d3      from 'd3';
 import url          from 'url';
 
-import maps         from 'maps.vue';
+import maps         from './maps.vue';
 
 Vue.use (VueRouter);
 Vue.use (Vuex);
 Vue.use (BootstrapVue);
 
 const routes = [
-    { 'path' : '/maps', 'component' : maps, },
+    {
+        'path'      : '/',
+        'name'      : 'map',
+        'component' : maps,
+    },
 ];
 
 const router = new VueRouter ({
@@ -78,7 +82,7 @@ export default {
         Promise.all (xhrs).then (function (responses) {
             const [json_geo, json_tile] = responses;
             vm.$store.state.geo_layers  = json_geo;
-            vm.$store.state.tile_layers = json_tile; // last! triggers map.vue.init
+            vm.$store.state.tile_layers = json_tile; // last! triggers map.vue.init_layers
         });
     },
 };
@@ -86,14 +90,60 @@ export default {
 </script>
 
 <style lang="scss">
-@import "bootstrap-custom";
+@import "~/src/css/bootstrap-custom";
 
 /* bootstrap */
-@import "../../node_modules/bootstrap/scss/bootstrap";
-@import "../../node_modules/bootstrap-vue/dist/bootstrap-vue.css";
+@import '~bootstrap';
+@import '~bootstrap-vue/src/index';
 
 /* List of icons at: http://astronautweb.co/snippet/font-awesome/ */
-@import "../../node_modules/@fortawesome/fontawesome-free/css/fontawesome.css";
-@import "../../node_modules/@fortawesome/fontawesome-free/scss/solid.scss";
+/* Fontawesome Font */
+
+$fa-font-path:    '~@fortawesome/fontawesome-free/webfonts';
+$fa-font-display: 'block';
+
+/*!
+ * Font Awesome Free 5.14.0 by @fontawesome - https://fontawesome.com
+ * License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License)
+ */
+
+@font-face {
+    font-family: 'Font Awesome 5 Free';
+    font-style: normal;
+    font-weight: 900;
+    font-display: $fa-font-display;
+    src: url('#{$fa-font-path}/fa-solid-900.woff2') format('woff2'),
+        url('#{$fa-font-path}/fa-solid-900.woff') format('woff'),
+        url('#{$fa-font-path}/fa-solid-900.ttf') format('truetype');
+}
+
+.fa,
+%fa,
+.fas,
+%fas {
+    font-family: 'Font Awesome 5 Free';
+    font-weight: 900;
+}
+
+/*!
+ * Font Awesome Free 5.14.0 by @fontawesome - https://fontawesome.com
+ * License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License)
+ */
+
+@font-face {
+    font-family: 'Font Awesome 5 Free';
+    font-style: normal;
+    font-weight: 400;
+    font-display: $fa-font-display;
+    src: url('#{$fa-font-path}/fa-regular-400.woff2') format('woff2'),
+        url('#{$fa-font-path}/fa-regular-400.woff') format('woff'),
+        url('#{$fa-font-path}/fa-regular-400.ttf') format('truetype');
+}
+
+.far,
+%far {
+    font-family: 'Font Awesome 5 Free';
+    font-weight: 400;
+}
 
 </style>

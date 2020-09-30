@@ -10,5 +10,5 @@ touch/
 hikemap.xml
 roads.mss
 __pycache__/
-client/build/
+client/dist/
 *.log

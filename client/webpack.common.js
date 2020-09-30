@@ -1,13 +1,17 @@
-const path            = require ('path');
-const VueLoaderPlugin = require ('vue-loader/lib/plugin');
+const glob = require ('glob');
+const path = require ('path');
+
+const HtmlWebpackPlugin = require ('html-webpack-plugin');
+const VueLoaderPlugin   = require ('vue-loader/lib/plugin'); // loads vue single-file components
 
 module.exports = {
+    context : path.resolve (__dirname),
     entry : {
-        app : 'js/main.js', // in app.bundle.js
+        'client' : './src/js/main.js',
     },
     output : {
-        filename : 'js/[name].bundle.js',
-        path : path.resolve (__dirname, 'build'),
+        filename : '[name].[contenthash].js',
+        path     : path.resolve (__dirname, 'dist'),
     },
     module : {
         rules : [
@@ -20,55 +24,33 @@ module.exports = {
             },
             {
                 test: /\.vue$/,
-                /* exclude: /node_modules/, */
+                exclude: /node_modules/,
                 use: [
                     'vue-loader',
                 ],
             },
             {
-                test: /\.css$/,
-                use: [
-                    'style-loader',
-                    'css-loader',
-                    'postcss-loader',
-                ],
-            },
-            {
-                test: /\.scss$/,
-                use: [
-                    'style-loader',
-                    'css-loader',
-                    'postcss-loader',
-                    'sass-loader',
-                ],
-            },
-            {
-                test: /\.(png|jpg|jpeg|gif)$/,
-                use: [
+                test : /\.(png|jpg|jpeg|gif)$/,
+                use  : [
                     {
-                        loader: 'file-loader',
-                        options: {
-                            name: '/images/[name].[ext]',
+                        loader  : 'file-loader',
+                        options : {
+                            name       : '[name].[contenthash].[ext]',
+                            outputPath : 'images',
                         },
                     },
                 ],
             },
             {
-                test: /\.(eot|svg|ttf|woff|woff2)$/,
-                use: [
+                test : /\.(ttf|woff|woff2)$/,
+                use  : [
                     {
-                        loader: 'file-loader',
-                        options: {
-                            name: '/webfonts/[name].[ext]',
+                        loader  : 'file-loader',
+                        options : {
+                            name       : '[name].[contenthash].[ext]',
+                            outputPath : 'webfonts',
                         },
                     },
-                ],
-            },
-            {
-                // compile a pegjs grammar to js
-                test: /\.pegjs$/,
-                use: [
-                    'pegjs-loader',
                 ],
             },
         ],
@@ -76,50 +58,26 @@ module.exports = {
     plugins: [
         new VueLoaderPlugin (),
     ],
-    devServer: {
-        host: '127.0.8.1',
-        port: 8080,
-        contentBase: './build',
-        public: 'hikemap.fritz.box:8080',
-    },
-    optimization: {
-        splitChunks: {
-            cacheGroups: {
-                common: {
-                    name: 'common',
-                    chunks: 'all',
-                    minChunks: 2,
-                    enforce: true,
-                },
-                vendor: {
-                    name: 'vendor',
-                    test: /node_modules/,
-                    chunks: 'all',
-                    reuseExistingChunk: true,
-                },
-            },
+    optimization : {
+        runtimeChunk : {
+            name : 'runtime',
         },
-        runtimeChunk: 'single',
+        moduleIds : 'deterministic',
     },
-    resolve: {
-        modules: [
-            path.resolve (__dirname, 'src'),
-            path.resolve (__dirname, 'src/components'),
-            path.resolve (__dirname, 'src/components/widgets'),
-            path.resolve (__dirname, 'src/css'),
-            path.resolve (__dirname, 'src/js'),
-            'node_modules',
+    plugins : [
+        new HtmlWebpackPlugin ({
+            template : './src/index.html',
+            inject   : false,
+            chunks   : [ 'client', 'vendor', 'runtime' ],
+        }),
+        new VueLoaderPlugin (),
+    ],
+    resolve : {
+        modules : [
+            path.join (__dirname, '../node_modules'),
         ],
         alias: {
-            /* See: https://webpack.js.org/configuration/resolve/#resolve-alias */
-            'vue$' : path.resolve (__dirname, 'node_modules/vue/dist/vue.esm.js'),
-            'frappe-charts$' : path.resolve (__dirname, 'node_modules/frappe-charts/dist/frappe-charts.esm.js'),
-            'bootstrap-custom' : path.resolve (
-                __dirname, 'src/css/bootstrap-custom.scss'
-            ),
-            'jquery-ui'      : path.resolve (__dirname, 'node_modules/jquery-ui/ui/widgets'),
-            'jquery-ui-css'  : path.resolve (__dirname, 'node_modules/jquery-ui/themes/base'),
-            /* 'd3'             : path.resolve (__dirname, 'node_modules/d3/dist/d3.js'), */
+            'frappe-charts$' : 'frappe-charts/dist/frappe-charts.esm.js',
         },
     },
 };

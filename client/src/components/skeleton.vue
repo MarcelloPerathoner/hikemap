@@ -27,6 +27,6 @@ export default {
 
 <style lang="scss">
 /* FIXME.vue */
-@import "bootstrap-custom";
+@import "~/src/css/bootstrap-custom";
 
 </style>
