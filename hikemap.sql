@@ -15,8 +15,8 @@ DROP VIEW IF EXISTS check_routes;
 
 DROP AGGREGATE IF EXISTS ref_agg (TEXT);
 
-DROP FUNCTION IF EXISTS altilenimetry;
 DROP FUNCTION IF EXISTS altimetry;
+DROP FUNCTION IF EXISTS altimetry2;
 DROP FUNCTION IF EXISTS ref_to_string;
 DROP FUNCTION IF EXISTS refs_to_string;
 DROP FUNCTION IF EXISTS add_refs;
@@ -200,30 +200,58 @@ WITH points3d AS (
 SELECT ST_MakeLine (geom) FROM points3d;
 $$ LANGUAGE SQL IMMUTABLE;
 
--- returns altimetry and walked distance of a linestring,
--- elevation in m in Z, distance in m in M
-CREATE OR REPLACE FUNCTION altilenimetry (geometry (LineString)) RETURNS geometry (LineString, 3857) AS $$
-
+-- returns altimetry of a linestring, elevation in m in Z
+-- note: osmosis snapshot is in 4326 but raster is in 3857
+CREATE OR REPLACE FUNCTION altimetry2 (geometry (LineString, 4326)) RETURNS geometry (LineString, 4326) AS $$
 WITH points3d AS (
-    SELECT ST_MakePoint (
+    SELECT ST_SetSRID (ST_MakePoint (
       ST_X (p.geom),
       ST_Y (p.geom),
-      ST_Value (dtm.rast, 1, p.geom)) AS geom
+      COALESCE (ST_Value (dtm.rast, 1, ST_Transform (p.geom, 3857)), 0)
+    ), 4326) AS geom
     FROM
-      (SELECT (ST_DumpPoints (ST_Transform ($1, 3857))).geom) AS p
-      JOIN raster_dtm dtm ON (ST_Intersects (dtm.rast, p.geom))
-    ),
-
-  -- add cumulative distance from origin
-  points AS
-    (SELECT ST_MakePoint (
-                ST_Length2D (ST_MakeLine (p.geom) OVER (ROWS UNBOUNDED PRECEDING)),
-                ST_Z (p.geom)
-                ) AS pt
-     FROM points3d p)
-
-SELECT ST_MakeLine (pt) FROM points;
+      (SELECT (ST_DumpPoints ($1)).geom) AS p
+        LEFT JOIN raster_dtm dtm ON (ST_Intersects (dtm.rast, ST_Transform (p.geom, 3857)))
+    )
+SELECT ST_MakeLine (geom) FROM points3d;
 $$ LANGUAGE SQL IMMUTABLE;
+
+-- add ways with precomputed altitudes to all known routes
+ALTER TABLE snapshot.ways ADD COLUMN linestringz geometry (LineStringZ, 4326);
+
+CREATE OR REPLACE VIEW ways_in_routes AS
+  SELECT r.id AS rel_id, rm.sequence_id, w.id AS way_id, w.linestring, w.linestringz, r.tags AS rel_tags
+  FROM snapshot.ways w
+    JOIN snapshot.relation_members rm ON rm.member_id   = w.id
+    JOIN snapshot.relations r         ON rm.relation_id = r.id
+  WHERE (rm.member_type, rm.member_role) = ('W', '') AND
+         r.tags->'type' = 'route' AND
+         r.tags->'route' IN  ('hiking', 'bicycle', 'mtb', 'piste', 'bus')
+  ORDER BY r.id, rm.sequence_id;
+
+WITH points2d AS (
+  SELECT DISTINCT way_id,
+         ST_DumpPoints (linestring) AS geom,
+         ST_DumpPoints (ST_Transform (linestring, 3857)) AS geom3857
+  FROM ways_in_routes
+),
+
+points3d AS (
+  SELECT way_id,
+  ST_MakeLine (ST_SetSRID (ST_MakePoint (
+    ST_X ((p.geom).geom),
+    ST_Y ((p.geom).geom),
+    COALESCE (ST_Value (dtm.rast, 1, (p.geom3857).geom), 0)
+  ), 4326) ORDER BY (p.geom).path) AS way_line
+  FROM points2d p
+    JOIN raster_dtm dtm ON ST_Intersects (dtm.rast, (p.geom3857).geom)
+  GROUP BY way_id
+)
+
+UPDATE snapshot.ways w
+  SET linestringz = way_line
+  FROM points3d p
+  WHERE w.id = p.way_id;
 
 
 CREATE VIEW check_routes AS

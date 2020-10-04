@@ -56,18 +56,13 @@ def _hikemap_lines (route_type):
 
     with current_app.config.dba.engine.begin () as conn:
         res = execute (conn, """
-        SELECT ST_AsGeoJSON (ST_LineMerge (ST_Collect (w.linestring ORDER BY rm.sequence_id)))::json AS geom,
-               r.id   AS geo_id,
-               r.tags AS tags
-        FROM snapshot.ways w
-          JOIN snapshot.relation_members rm
-            ON (rm.member_id, rm.member_type) = (w.id, 'W')
-            JOIN snapshot.relations r
-              ON rm.relation_id = r.id
-        WHERE w.linestring && {bbox}
-          AND r.tags->'type'  = 'route'
-          AND r.tags->'route' = :route_type
-        GROUP BY 2
+        SELECT ST_AsGeoJSON (ST_LineMerge (ST_Collect (linestring ORDER BY sequence_id)))::json AS geom,
+               rel_id   AS geo_id,
+               rel_tags AS tags
+        FROM ways_in_routes w
+        WHERE linestring && {bbox}
+          AND rel_tags->'route' = :route_type
+        GROUP BY rel_id, rel_tags
         """, init_query_params (conn, route_type = route_type))
 
         return common.make_geojson_response (
@@ -121,25 +116,43 @@ def _hikemap_shields (route_type):
 
 
 def _hikemap_altimetry (route_id):
-    """ Return route altimetry. """
+    """ Return route altimetry.
+
+    This always returns altimetry for the whole route.
+    """
 
     with current_app.config.dba.engine.begin () as conn:
         res = execute (conn, """
-        SELECT ST_AsGeoJSON (altilenimetry (ST_LineInterpolatePoints (
-          ST_LineMerge (ST_Collect (w.linestring ORDER BY rm.sequence_id)), 0.01)))::json AS geom,
-               r.id   AS geo_id,
-               r.tags AS tags
-        FROM snapshot.ways w
-          JOIN snapshot.relation_members rm
-            ON (rm.member_id, rm.member_type) = (w.id, 'W')
-            JOIN snapshot.relations r
-              ON rm.relation_id = r.id
-        WHERE r.id = :relation_id AND rm.member_role = ''
-        GROUP BY 2
+        SELECT ST_AsGeoJSON (ST_LineMerge (ST_Collect (linestringz ORDER BY sequence_id)))::json AS geom,
+               rel_id AS geo_id,
+               rel_tags AS tags
+        FROM ways_in_routes w
+        WHERE rel_id = :relation_id
+        GROUP BY rel_id, rel_tags
         """, init_query_params (conn, relation_id = route_id))
 
         return common.make_geojson_response (
             res, 'geom, geo_id, tags'
+        )
+
+
+@geo_app.route ('/routes/<route_type:route_type>.json')
+def routes_geojson (route_type):
+    """ Return all routes that intersect the bounding box.
+    """
+
+    with current_app.config.dba.engine.begin () as conn:
+        res = execute (conn, """
+        SELECT rel_id   AS geo_id,
+               rel_tags AS tags
+        FROM ways_in_routes w
+        WHERE linestring && {bbox}
+          AND rel_tags->'route' = :route_type
+        GROUP BY rel_id, rel_tags
+        """, init_query_params (conn, route_type = route_type))
+
+        return common.make_rowjson_response (
+            res, 'geo_id, tags'
         )
 
 

@@ -45,13 +45,13 @@ PGPASSWORD  := $(shell apg -a 1 -m 32 -M ncl -n 1)
 
 # we also import the pgsnapshot schema
 # https://wiki.openstreetmap.org/wiki/Osmosis/Detailed_Usage_0.47#PostGIS_Tasks_.28Snapshot_Schema.29
-SNAP_DB     = osm
-SNAP_SCHEMA = snapshot
+SNAP_DIR     = /usr/share/doc/osmosis/examples
+SNAP_DB      = osm
+SNAP_SCHEMA  = snapshot
 
 PSQL      = psql -h $(PGHOST) -U $(PGUSER)
 PSQL_OSM  = $(PSQL) -d $(PGDATABASE)
 PSQL_SNAP = $(PSQL) -d $(SNAP_DB) -c 'SET search_path TO $(SNAP_SCHEMA),public'
-PSQL_SNAP_SCRIPT = $(PSQL_SNAP) -f /usr/share/doc/osmosis/examples/pgsnapshot
 
 PSQL_SU   = sudo -u postgres psql
 CARTO     = node_modules/carto/bin/carto
@@ -123,19 +123,19 @@ touch/osmosis: $(OSM_CLIPPED)
 	mkdir -p pgimport
 	$(PSQL) -d $(SNAP_DB) -c "DROP SCHEMA IF EXISTS $(SNAP_SCHEMA) CASCADE"
 	$(PSQL) -d $(SNAP_DB) -c "CREATE SCHEMA IF NOT EXISTS $(SNAP_SCHEMA)"
-	$(PSQL_SNAP_SCRIPT)_schema_0.6.sql
-	$(PSQL_SNAP_SCRIPT)_schema_0.6_action.sql
-	$(PSQL_SNAP_SCRIPT)_schema_0.6_bbox.sql
-	$(PSQL_SNAP_SCRIPT)_schema_0.6_linestring.sql
+	$(PSQL_SNAP) -f $(SNAP_DIR)/pgsnapshot_schema_0.6.sql
+	$(PSQL_SNAP) -f $(SNAP_DIR)/pgsnapshot_schema_0.6_action.sql
+	$(PSQL_SNAP) -f $(SNAP_DIR)/pgsnapshot_schema_0.6_bbox.sql
+	$(PSQL_SNAP) -f $(SNAP_DIR)/pgsnapshot_schema_0.6_linestring.sql
 	osmosis --read-xml $< --log-progress \
 		--write-pgsql-dump pgimport enableBboxBuilder=yes enableLinestringBuilder=yes
-	cd pgimport; $(PSQL_SNAP_SCRIPT)_load_0.6.sql; cd ..
+	cd pgimport; $(PSQL_SNAP) -f $(SNAP_DIR)/pgsnapshot_load_0.6.sql; cd ..
 	rm pgimport/*
 	touch $@
 
 download:
-	wget -N -P $(DATADIR) $(GEO_FABRIK)/$(OSM_DUMP)
-	$(OSM_CARTO)/scripts/get-shapefiles.py -n -d $(DATADIR)
+	wget -q -N -P $(DATADIR) $(GEO_FABRIK)/$(OSM_DUMP)
+	$(OSM_CARTO)/scripts/get-external-data.py
 
 build-patch:
 	-diff -U 3 $(OSM_CARTO)/project.mml     project.mml     > project.patch

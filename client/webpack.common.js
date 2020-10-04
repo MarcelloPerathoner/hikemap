@@ -76,8 +76,5 @@ module.exports = {
         modules : [
             path.join (__dirname, '../node_modules'),
         ],
-        alias: {
-            'frappe-charts$' : 'frappe-charts/dist/frappe-charts.esm.js',
-        },
     },
 };

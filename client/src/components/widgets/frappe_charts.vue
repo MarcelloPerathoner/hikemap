@@ -3,28 +3,55 @@
 </template>
 
 <script>
-import { Chart } from "frappe-charts";
+// import frappe from "frappe-charts";
+import { Chart } from "frappe-charts/dist/frappe-charts.min.esm";
 
 export default {
     props: {
-        'options' : {
+        'data' : {
             required: true,
-            type: Object,
+            type: Array,
+        },
+        'height' : {
+            'required' : false,
+            'type'     : Number,
+            'default'  : 200,
         },
     },
     data () {
         return {
+            'options' : {
+                data   : {},
+                type   : 'line',
+                height : this.height,
+                colors : ['red'],
+                lineOptions : {
+                    regionFill : 1,
+                    hideDots   : 1,
+                    spline     : 1,
+                    xIsSeries  : true,
+                },
+            }
         }
     },
     watch: {
-        'options.data' : {
-            handler () {
-                this.chart.update (this.options.data);
-            },
-            'deep' : true,
-        }
+        'data' : function () { this.update_chart (); },
+    },
+    methods: {
+        cook (data) {
+            return {
+                data.map (d => {
+                    return { key: d[0], value: d[1] };
+                });
+            };
+        },
+        update_chart () {
+            this.options.data = this.cook (this.data);
+            this.chart.update (this.options.data);
+        },
     },
     mounted () {
+        this.options.data = this.cook (this.data);
         this.chart = new Chart (this.$el, this.options)
     },
 }
@@ -33,5 +60,5 @@ export default {
 <style lang="scss">
 /* frappe_charts.vue */
 
-@import "frappe-charts/dist/frappe-charts.min.css";
+@import "~frappe-charts/dist/frappe-charts.min.css";
 </style>
