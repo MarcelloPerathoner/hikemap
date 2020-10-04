@@ -35,7 +35,7 @@ export default {
         'my-chart' : chart,
     },
     'props' : {
-        'feature' : {
+        'selected' : {
             'type' : Object,
         },
     },
@@ -48,14 +48,14 @@ export default {
     },
     'computed' : {
         'title' : function () {
-            const props = this.feature && this.feature.properties;
+            const props = this.selected && this.selected.properties;
             if (props) {
                 return props.tags.ref;
             }
             return '';
         },
         'table_items' : function () {
-            const props = this.feature && this.feature.properties;
+            const props = this.selected && this.selected.properties;
             if (props) {
                 const o = Object.entries (props.tags).map (d => {
                     return { 'tag' : d[0], 'value' : d[1] };
@@ -67,17 +67,17 @@ export default {
         },
     },
     'watch' : {
-        'feature' : function () {
-            if (this.feature) {
+        'selected' : function () {
+            if (this.selected) {
                 this.update_chart ();
             }
-            this.is_open = !!this.feature;
+            this.is_open = !!this.selected;
         }
     },
     'methods' : {
         update_chart () {
             const vm = this;
-            const geom = vm.feature && vm.feature.geometry;
+            const geom = vm.selected && vm.selected.geometry;
             if (geom) {
                 vm.chart_data = geom.coordinates;
                 vm.length = d3.geoLength (geom) * 6371;
@@ -93,7 +93,7 @@ export default {
             return '';
         },
         on_chart (highlight) {
-            this.feature.highlight = highlight;
+            this.selected.highlight = highlight;
         }
     },
 };

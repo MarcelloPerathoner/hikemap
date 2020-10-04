@@ -1,10 +1,10 @@
 <template>
   <div class="maps-vm">
     <div id="content">
-      <slippy-map ref="map" @click.native="on_click" />
+      <slippy-map ref="map" :selected="selected" @click.native="on_click" />
     </div>
 
-    <my-sidebar :feature="selected" @hidden="on_sidebar_hidden" />
+    <my-sidebar :selected="selected" @hidden="on_sidebar_hidden" />
 
     <header>
       <nav ref="tb" class="maps-vm-toolbar">
@@ -91,7 +91,7 @@ export default {
             }
         },
         on_sidebar_hidden (event) {
-            this.selected.g_route.classed ('selected', false);
+            this.selected.unselect ();
             this.selected = null;
         },
         edit_map_with (id) {

@@ -1,5 +1,5 @@
 <template>
-  <div id="map" @click="on_click" />
+  <div id="map" />
   </div>
 </template>
 
@@ -25,19 +25,40 @@ import _        from 'lodash';
 
 import 'leaflet/dist/leaflet.css';
 
-function add_centroids (feature_collection) {
-    if (feature_collection.type == 'FeatureCollection') {
-        for (const feature of feature_collection.features) {
-            feature.properties.centroid = d3.geoCentroid (feature);
-        }
-    }
-}
-
 function ensure_ref (tags) {
     if (!tags.ref && tags.name) {
         const re = /\p{Lu}/gu;
         tags.ref = tags.name.match (re).join ('') || '???';
     }
+}
+
+function curveContext (curve) {
+    // https://observablehq.com/@d3/context-to-curve
+    return {
+        moveTo (x, y) {
+            curve.lineEnd ();
+            curve.lineStart ();
+            curve.point (x, y);
+        },
+        lineTo (x, y) {
+            curve.point (x, y);
+        },
+    };
+}
+
+function getPointAtLength (coordinates, length) {
+    // find the point at distance length from the start of the linestring
+    const l = length / 6371; // geoDistance returns radians
+
+    const z = _.zip (coordinates.slice (0, -1), coordinates.slice (1));
+    let s = 0;
+    for (const [p1, p2] of z) {
+        s += d3.geoDistance (p1, p2);
+        if (s >= l) {
+            return p1;
+        }
+    }
+    return coordinates[coordinates.length -1];
 }
 
 const colorScale = d3.scaleOrdinal (d3.schemeSet2);
@@ -92,6 +113,14 @@ L.D3_geoJSON = L.Layer.extend ({
         this.g = this.svg.append ('g')
             .classed ('leaflet-zoom-hide', true);
 
+        this.project_x_y = (x, y) => {
+            return map.latLngToLayerPoint (new L.LatLng (y, x));
+        }
+
+        this.project_pt = (pt) => {
+            return map.latLngToLayerPoint (new L.LatLng (pt.y, pt.x));
+        }
+
         function projectPoint (x, y) {
             const point = map.latLngToLayerPoint (new L.LatLng (y, x));
             this.stream.point (point.x, point.y);
@@ -145,24 +174,6 @@ L.D3_geoJSON = L.Layer.extend ({
             that.addData ({ 'features' : [] });
         }
     },
-    load_data_old () {
-        const that = this;
-        if (this.url
-            && (this.map.getZoom () >= this.my_options.min_zoom)
-            && (this.map.getZoom () <= this.my_options.max_zoom)) {
-
-            const url = new URL (this.url);
-            const bb = this.map.getBounds ();
-
-            url.searchParams.set ('extent', `${bb.getWest ()},${bb.getSouth ()},${bb.getEast ()},${bb.getNorth ()}`);
-
-            d3.json (url).then (function (json) {
-                that.addData (json);
-            });
-        } else {
-            that.addData ({ 'features' : [] });
-        }
-    },
     getAttribution () {
         return this.options.attribution;
     },
@@ -190,124 +201,84 @@ L.D3_geoJSON = L.Layer.extend ({
     },
 });
 
-// A stylable Lines Layer (for hiking paths or bus lines)
-
-function curveContext (curve) {
-    // https://observablehq.com/@d3/context-to-curve
-    return {
-        moveTo (x, y) {
-            curve.lineEnd ();
-            curve.lineStart ();
-            curve.point (x, y);
-        },
-        lineTo (x, y) {
-            curve.point (x, y);
-        },
-    };
-}
-
-L.Layer_Lines = L.D3_geoJSON.extend ({
-    onAdd (map) {
-        L.D3_geoJSON.prototype.onAdd.call (this, map);
-
-        this.g_lines = this.g.append ('g').classed ('lines', true);
-
-        this.on_zoom_end ();
-    },
-    d3_reset () {
-        this.g_lines.selectAll ('g').remove ();
-    },
-    d3_update (geojson) {
-        const that = this;
-
-        const u = that.g_lines
-              .selectAll ('g')
-              .data (geojson.features, d => d.properties.geo_id);
-
-        u.exit ().remove (); // routes that aren't in bbox any more
-
-        const e = u.enter ()
-              .append ('g')
-              .classed ('route', true)
-              .attr ('data-route-ref', d => d.properties.tags.ref)
-              .attr ('data-relation-id', d => d.properties.geo_id);
-
-        e.append ('path').classed ('route', true);
-
-        e.merge (u).select ('path')
-            .attr ('d', d => {
-                // smooth the path
-                const context = d3.path ();
-                const curve = d3.curveCardinal.tension (0.5) (context);
-                curve.lineStart ();
-                d3.geoPath (that.transform, curveContext (curve)) (d);
-                curve.lineEnd ();
-                return context;
-            });
-    },
-})
-
 L.Layer_Shields = L.D3_geoJSON.extend ({
     // a shield layer
     onAdd (map) {
+        const that = this;
+
         L.D3_geoJSON.prototype.onAdd.call (this, map);
         this.svg.style ('z-index', 1000);
 
-        this.g_shields = this.g.append ('g').classed ('shields', true);
-        this.g_shields.on ('click', function (event, d) {
-            // event bubbled up from rect thru g.route to g.shields
+        this.g_lines     = this.g.append ('g').classed ('lines',     true);
+        this.g_highlight = this.g.append ('g').classed ('highlight', true);
+        this.g_shields   = this.g.append ('g').classed ('shields',   true);
+
+        // a circle to highlight a position on the path
+        this.g_highlight.append ('circle').classed ('highlight', true);
+
+        this.svg.on ('click', function (event, d) {
+            // event bubbled up from rect thru g.route to svg
             // select the clicked route, deselect all other routes
             // and bubble further up
-            if (event.hikemap && event.hikemap.g_route) {
-                d3.select (this).selectAll ('g.selected').classed ('selected', false);
-                event.hikemap.g_route.classed ('selected', true);
+            if (event.hikemap) {
+                const p = event.hikemap.properties;
+                that.g_lines.selectAll ('g.selected').classed ('selected', false);
+                const g = that.g_lines.select (`g.route[data-relation-id="${p.geo_id}"]`);
+                g.classed ('selected', true);
+
+                event.hikemap.unselect = () => {
+                    g.classed ('selected', false);
+                };
+                event.hikemap.set_highlight = (length) => {
+                    const highlight = Number.isFinite (length);
+                    const circle = that.g_highlight.select ('circle.highlight');
+                    if (highlight) {
+                        const geom = event.hikemap.geometry;
+                        const pt   = getPointAtLength (geom.coordinates, length);
+                        const pt2  = that.project_x_y (pt[0], pt[1]);
+                        circle
+                            .attr ('cx', pt2.x)
+                            .attr ('cy', pt2.y);
+                    }
+                    circle.classed ('active', highlight);
+                }
+
+                event.hikemap.g_lines_g_route = g;
+                event.hikemap.g_lines     = that.g_lines;
+                event.hikemap.g_highlight = that.g_highlight;
+                event.hikemap.g_shields   = that.g_shields;
             }
         });
         this.on_zoom_end ();
     },
     d3_reset () {
+        this.g_lines.selectAll   ('g').remove ();
         this.g_shields.selectAll ('g').remove ();
     },
     d3_update (geojson) {
         const that = this;
 
-        // for each route in this view => g
-        const u = that.g_shields
+        // Lines (all lines must lay below shields)
+
+        const ul = that.g_lines
               .selectAll ('g.route')
               .data (geojson.features, d => d.properties.geo_id);
 
-        u.exit ().remove (); // routes that aren't in bbox any more
+        ul.exit ().remove (); // routes that aren't in bbox any more
 
-        const e = u.enter ()
+        const el = ul.enter ()
               .append ('g')
               .classed ('route', true)
               .attr ('data-route-ref',   d => d.properties.tags.ref)
               .attr ('data-relation-id', d => d.properties.geo_id);
 
         // we string up the shields at regular intervals along this path
-        e.append ('path').classed ('shield-helper', true);
-        // a circle to highlight a position on the path
-        e.append ('circle').classed ('highlight', true);
+        el.append ('path');
 
-        e.on ('click', function (event, d) {
-            // event bubbled up from rect to g.route.
-            // note the g and bubble further up
-            if (event.hikemap) {
-                event.hikemap.g_route = d3.select (this);
-            }
-        });
+        el.merge (ul).each (function (d, i, nodes) {
+            const d3g = d3.select (this);
+            const path = d3g.select ('path');
 
-        const quad = d3.quadtree ();
-
-        e.merge (u).each (function (d, i, nodes) {
-            const p = d.properties;
-
-            const d3this = d3.select (this);
-
-            // remove current shields
-            d3this.selectAll ('g.shield').remove ();
-
-            const path = d3this.select ('path');
             path.attr ('d', d => {
                 // smooth the path
                 const context = d3.path ();
@@ -317,47 +288,94 @@ L.Layer_Shields = L.D3_geoJSON.extend ({
                 curve.lineEnd ();
                 return context;
             });
+        });
 
-            const step    = that.my_options.step;
-            const maxlen  = path.node ().getTotalLength () - step / 2;
-            const epsilon = step / 10;
+        // Shields (all shields must lay above lines)
 
-            let l = step / 2;  // the current length along the path
+        // for each route in this view => g
+        const u = that.g_shields
+              .selectAll ('g.route')
+              .data (geojson.features, d => d.properties.geo_id);
 
-            while (l < maxlen) {
-                // find a free place to squat
-                const pt = path.node ().getPointAtLength (l);
-                if (quad.find (pt.x, pt.y, 1.5 * epsilon) !== undefined) {
-                    // place is occupied, try again just a little bit further along the path
-                    l += epsilon;
-                    continue;
-                }
+        u.exit ().remove (); // shields of routes that don't cross bbox any more
 
-                ensure_ref (p.tags);
+        const e = u.enter ()
+              .append ('g')
+              .classed ('route', true)
+              .attr ('data-route-ref',   d => d.properties.tags.ref)
+              .attr ('data-relation-id', d => d.properties.geo_id);
 
-                // place is free to squat
-                const g = d3this.append ('g')
-                      .classed ('shield', true)
-                      .attr ('transform', `translate(${pt.x},${pt.y})`);
-                const rect = g.append ('rect');
-                const text = g.append ('text')
-                      .text (d => p.tags.ref);
+        e.on ('click', function (event, d) {
+            // event bubbled up from shield rect to g.route.
+            // note the g and bubble further up
+            if (event.hikemap) {
+                event.hikemap.g_shields_g_route = d3.select (this);
+            }
+        });
 
-                g.on ('click', function (event, d) {
-                    // set this in event, then let it bubble up
-                    event.hikemap = d;
-                    event.hikemap.highlight = null;
+        const quad = d3.quadtree ();
+        const step    = that.my_options.step;
+        const epsilon = step / 10;
+
+        e.merge (u).each (function (d, i, nodes) {
+            const p = d.properties;
+            ensure_ref (p.tags);
+
+            if (d.geometry.type === 'LineString') {
+                const coords = d.geometry.coordinates.map (pt => {
+                    return that.project_x_y (pt[0], pt[1]);
                 });
 
-                const bbox = text.node ().getBBox ();
-                rect.attr ('width',  bbox.width  + 4);
-                rect.attr ('height', bbox.height + 4);
-                rect.attr ('x', -bbox.width  / 2 - 2);
-                rect.attr ('y', -bbox.height / 2 - 3);
+                const d3this = d3.select (this);
 
-                quad.add ([pt.x, pt.y]); // mark place as occupied
-                l += step; // place the next shield a good distance further along
-            };
+                // remove current shields
+                d3this.selectAll ('g.shield').remove ();
+
+                // get the path to follow from the g.lines
+                const path = that.g_lines.select (`g.route[data-relation-id="${p.geo_id}"] path`);
+
+                let l = step / 2; // the target length for the next shield
+                let s = 0;        // the current length along the path
+
+                const z = _.zip (coords.slice (0, -1), coords.slice (1));
+                for (const [p1, p2] of z) {
+                    s += Math.sqrt ((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+                    if (s > l) {
+                        if (quad.find (p2.x, p2.y, 1.5 * epsilon) !== undefined) {
+                            // place is occupied, try again just a little bit further along the path
+                            l += epsilon;
+                            continue;
+                        }
+
+                        // place is free to squat
+                        const g = d3this.append ('g')
+                              .classed ('shield', true)
+                              .attr ('transform', `translate(${p2.x},${p2.y})`);
+                        const rect = g.append ('rect');
+                        const text = g.append ('text')
+                              .text (d => p.tags.ref);
+
+                        g.on ('click', function (event, d) {
+                            // set this in event, then let it bubble up
+                            event.hikemap = d;
+                            event.hikemap.highlight = null;
+                        });
+
+                        const bbox = text.node ().getBBox ();
+                        rect.attr ('width',  bbox.width  + 4);
+                        rect.attr ('height', bbox.height + 4);
+                        rect.attr ('x', -bbox.width  / 2 - 2);
+                        rect.attr ('y', -bbox.height / 2 - 3);
+
+                        quad.add ([p2.x, p2.y]); // mark place as occupied
+                        l += step; // place the next shield a good distance further along
+                    }
+                };
+            } else {
+                if (process.env.NODE_ENV !== 'production') {
+                    console.warn (`Error: geometry of type ${d.geometry.type} in ${p.tags.ref}`);
+                }
+            }
         });
     },
 })
@@ -376,13 +394,15 @@ L.Control.Info_Pane = L.Control.extend ({
 });
 
 export default {
+    'props' : {
+        'selected' : Object,
+    },
     'data'  : function () {
         return {
             'geo_data'       : null,
             'layer_infos'    : [],
             'base_layers'    : {},
             'overlay_layers' : {},
-            'selected'       : {},
         };
     },
     'computed' : {
@@ -398,6 +418,9 @@ export default {
         },
         'tile_layers' : function (new_val) {
             this.init_layers (new_val);
+        },
+        'selected' : function () {
+            this.on_selected ();
         },
         $route (to, from) {
             this.set_view (to.hash);
@@ -427,24 +450,14 @@ export default {
             for (const layer_info of vm.geo_layers.layers) {
                 const sublayers = [];
                 for (const sublayer_info of layer_info.layers) {
-                    const sublayer = (sublayer_info.type === 'shields') ?
-                          new L.Layer_Shields (
-                              null, // geojson object
-                              {
-                                  'interactive'         : true,
-                                  'bubblingMouseEvents' : false,
-                                  'attribution'         : layer_info.attribution,
-                              }
-                          ) :
-                          new L.Layer_Lines (
-                              null, // geojson object
-                              {
-                                  'interactive'         : true,
-                                  'bubblingMouseEvents' : false,
-                                  'attribution'         : layer_info.attribution,
-                              }
-                          );
-
+                    const sublayer = new L.Layer_Shields (
+                        null, // geojson object
+                        {
+                            'interactive'         : true,
+                            'bubblingMouseEvents' : false,
+                            'attribution'         : layer_info.attribution,
+                        }
+                    );
                     sublayer.setDatasource (sublayer_info.url.replace ('{api}', vm.$root.api_url));
                     sublayer.my_options = {
                         'vm'       : vm,
@@ -515,10 +528,7 @@ export default {
             }
             this.$emit ('move_zoom', this.map);
         },
-        on_click (event) {
-            if (event.hikemap) {
-                this.selected = event.hikemap;
-            }
+        on_selected () {
         },
     },
     'mounted' : function () {
@@ -537,18 +547,8 @@ export default {
         vm.$watch (function () {
             return vm.selected && vm.selected.highlight;
         }, function () {
-            const g         = this.selected.g_route;
-            const path      = g.select ('path');
-            const circle    = g.select ('circle.highlight');
-            const highlight = Number.isFinite (this.selected.highlight);
-            if (highlight) {
-                const node = path.node ();
-                const pt = node.getPointAtLength (this.selected.highlight * node.getTotalLength ());
-                circle
-                    .attr ('cx', pt.x)
-                    .attr ('cy', pt.y);
-            }
-            g.classed ('highlighted', highlight);
+            const sel = vm.selected;
+            sel.set_highlight (sel.highlight);
         });
     },
 };
@@ -582,45 +582,37 @@ svg.hikemap {
         text-anchor: middle;
     }
 
-    path {
-        fill: transparent;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-        shape-rendering: geometricPrecision;
-    }
-
     g.lines {
         opacity: 0.2;
 
         path {
             stroke: var(--hikemap-color);
+            stroke-width: 10px;
+            fill: transparent;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            shape-rendering: geometricPrecision;
+        }
+
+        g.route.selected path {
             stroke-width: 20px;
         }
     }
 
-    g.shields {
-        path {
-            stroke: var(--hikemap-color);
-            fill: transparent;
-            stroke-width: 10px;
-            opacity: 0;
-        }
-
-        g.route.selected path {
-            opacity: 1;
-        }
-
+    g.highlight {
         circle.highlight {
             stroke: var(--hikemap-color);
             stroke-width: 5px;
             fill: transparent;
             r: 20px;
             opacity: 0;
+            &.active {
+                opacity: 1;
+            }
         }
+    }
 
-        g.route.selected.highlighted circle.highlight {
-            opacity: 1;
-        }
+    g.shields {
     }
 
     g.shield {

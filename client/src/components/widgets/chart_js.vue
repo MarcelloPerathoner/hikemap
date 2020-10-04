@@ -103,16 +103,13 @@ export default {
                     intersect: false,
                     // Disable the on-canvas tooltip
                     enabled: false,
-                    // this tooltip emits events
-                    // the argument is the distance along the route the mouse
-                    // pointer is hovering expressed as 0 at the start and 1 at the end.
+                    // This tooltip emits events, the argument being the
+                    // distance along the route that the mouse pointer is
+                    // hovering.
                     custom: function (tooltipModel) {
                         if (tooltipModel.dataPoints) {
                             const length = tooltipModel.dataPoints[0].xLabel;
-                            const maxlen = vm.chart.options.scales.xAxes[0].ticks.suggestedMax;
-                            // console.log (tooltipModel);
-                            // console.log (length / maxlen);
-                            vm.$emit ('chart', length / maxlen);
+                            vm.$emit ('chart', length);
                         }
                     }
                 },
