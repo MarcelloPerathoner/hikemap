@@ -17,6 +17,7 @@ from config import args, init_logging
 
 from db_tools import PostgreSQLEngine
 
+from info_server     import info_app
 from tile_server     import tile_app
 from geo_server      import geo_app, RouteTypeConverter
 
@@ -53,6 +54,9 @@ def create_app (Config):
     app.url_map.converters['route_type'] = RouteTypeConverter
 
     app.config.from_pyfile (Config.CONFIG_FILE)
+
+    app.register_blueprint (info_app, url_prefix = '/info')
+    tile_app.init_app (app)
 
     app.register_blueprint (tile_app, url_prefix = '/tile')
     tile_app.init_app (app)

@@ -1,10 +1,21 @@
 <template>
   <div class="maps-vm">
     <div id="content">
-      <slippy-map ref="map" :selected="selected" @click.native="on_click" />
+      <slippy-map ref="map"
+                  :selected="selected"
+                  :marker="marker"
+                  @click.native="on_click"
+                  @mousemove.native="on_mousemove"
+                  @mouseout.native="on_mouseout"
+                  />
     </div>
 
-    <my-sidebar :selected="selected" @hidden="on_sidebar_hidden" />
+    <my-sidebar :selected="selected"
+                :marker="marker"
+                @hidden="on_sidebar_hidden"
+                @mousemove.native="on_mousemove"
+                @mouseout.native="on_mouseout"
+                />
 
     <header>
       <nav ref="tb" class="maps-vm-toolbar">
@@ -71,6 +82,7 @@ export default {
             'next_id'     : 1,
             'editors'     : EDITORS,
             'selected'    : null,
+            'marker'      : null,
         };
     },
     'computed' : {
@@ -90,6 +102,22 @@ export default {
                 this.selected = event.hikemap;
             }
         },
+        on_mousemove (event) {
+            if (event.hikemarker) {
+                this.marker = event.hikemarker.index;
+            }
+            if (event.hikechart) {
+                this.marker = event.hikechart.index;
+            }
+        },
+        on_mouseout (event) {
+            if (event.hikemarker) {
+                this.marker = event.hikemarker.index;
+            }
+            if (event.hikechart) {
+                this.marker = event.hikechart.index;
+            }
+        },
         on_sidebar_hidden (event) {
             this.selected.unselect ();
             this.selected = null;
@@ -99,7 +127,6 @@ export default {
                 if (item.id === id) {
                     if (item.local) {
                         const b = this.$refs.map.map.getBounds ();
-                        const josm = 'http://127.0.0.1:8111/load_and_zoom';
                         const params = {
                             'left'   : b.getWest (),
                             'right'  : b.getEast (),

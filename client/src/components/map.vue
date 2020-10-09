@@ -1,5 +1,5 @@
 <template>
-  <div id="map" />
+  <div id="map" @click="on_click" />
   </div>
 </template>
 
@@ -18,83 +18,16 @@
 
 import { mapGetters } from 'vuex'
 
-import $        from 'jquery';
 import * as d3  from 'd3';
 import L        from 'leaflet';
 import _        from 'lodash';
 
+import * as tools from '../js/tools.js';
+
 import 'leaflet/dist/leaflet.css';
 
-function ensure_ref (tags) {
-    if (!tags.ref && tags.name) {
-        const re = /\p{Lu}/gu;
-        tags.ref = tags.name.match (re).join ('') || '???';
-    }
-}
-
-function curveContext (curve) {
-    // https://observablehq.com/@d3/context-to-curve
-    return {
-        moveTo (x, y) {
-            curve.lineEnd ();
-            curve.lineStart ();
-            curve.point (x, y);
-        },
-        lineTo (x, y) {
-            curve.point (x, y);
-        },
-    };
-}
-
-function getPointAtLength (coordinates, length) {
-    // find the point at distance length from the start of the linestring
-    const l = length / 6371; // geoDistance returns radians
-
-    const z = _.zip (coordinates.slice (0, -1), coordinates.slice (1));
-    let s = 0;
-    for (const [p1, p2] of z) {
-        s += d3.geoDistance (p1, p2);
-        if (s >= l) {
-            return p1;
-        }
-    }
-    return coordinates[coordinates.length -1];
-}
-
-const colorScale = d3.scaleOrdinal (d3.schemeSet2);
-
-function wrap (text, width) {
-    // Credit: adapted from https://bl.ocks.org/mbostock/7555321
-    text.each (function () {
-        var text = d3.select (this),
-            words = text.text ().split (/\s+/).reverse (),
-            word,
-            line = [],
-            lineNumber = 0,
-            lineHeight = 1.3, // ems
-            y = text.attr ("y"),
-            dy = parseFloat (text.attr ("dy") || '0');
-        let tspan = text.text (null)
-            .append ("tspan")
-            .attr ("x", 0)
-            .attr ("y", y)
-            .attr ("dy", dy + "em");
-        while (word = words.pop ()) {
-            line.push (word);
-            tspan.text (line.join (" "));
-            if (tspan.node ().getComputedTextLength () > width) {
-                line.pop ();
-                tspan.text (line.join (" "));
-                line = [word];
-                tspan = text.append ("tspan")
-                    .attr ("x", 0)
-                    .attr ("y", y)
-                    .attr ("dy", (++lineNumber * lineHeight + dy) + "em")
-                    .text (word);
-            }
-        }
-    });
-}
+const l_pos  = d3.local ();  // position
+const l_sym  = d3.local ();  // <symbol> data for <use>
 
 // A Leaflet layer that uses D3 to display features.  Easily styleable with CSS.
 
@@ -113,12 +46,14 @@ L.D3_geoJSON = L.Layer.extend ({
         this.g = this.svg.append ('g')
             .classed ('leaflet-zoom-hide', true);
 
-        this.project_x_y = (x, y) => {
-            return map.latLngToLayerPoint (new L.LatLng (y, x));
+        this.defs = this.svg.append ('defs');
+
+        this.project = (ll) => {
+            return map.latLngToLayerPoint (ll);
         }
 
-        this.project_pt = (pt) => {
-            return map.latLngToLayerPoint (new L.LatLng (pt.y, pt.x));
+        this.unproject = (pt) => {
+            return map.layerPointToLatLng (pt);
         }
 
         function projectPoint (x, y) {
@@ -141,37 +76,33 @@ L.D3_geoJSON = L.Layer.extend ({
             'moveend' : this.on_move_end,
         };
     },
-    addData (geojson) {
-        this.geojson = geojson;
-        this.d3_update (this.geojson);
-    },
     setDatasource (url) {
         this.url = url;
     },
-    load_data () {
+    load_data (has_zoomed) {
         const that = this;
         if (this.url
             && (this.map.getZoom () >= this.my_options.min_zoom)
             && (this.map.getZoom () <= this.my_options.max_zoom)) {
 
-            const url  = new URL (this.url);
-            const url2 = `${that.my_options.vm.$root.api_url}geo/altimetry/`;
-            const bb   = this.map.getBounds ();
+            const url    = new URL (this.url);
+            const params = this.map.getBounds ().toBBoxString ();
+            url.searchParams.set ('extent', params);
 
-            const params = [bb.getWest (), bb.getSouth (), bb.getEast (), bb.getNorth ()];
+            if (process.env.NODE_ENV !== 'production') {
+                console.log (`Loading routes for bbox: ${params}`);
+            }
 
-            url.searchParams.set ('extent', params.map (p => p.toFixed (6)).join (','));
-
-            d3.json (url).then (function (json) {
-                // the routes that intersect the bbox
-                const requests = json.data.map (d => d3.json (url2 + d.geo_id));
-                Promise.all (requests).then (function (responses) {
-                    const features = responses.map (d => d.features[0]);
-                    that.addData ({ 'features' : features });
+            d3.json (url) // get routes
+                .then (function (json) {
+                    that.d3_update (json.features.map (f => {
+                        tools.ensure_ref (f.properties);
+                        tools.ensure_osmc_symbol (f.properties, that.my_options);
+                        return f;
+                    }), has_zoomed);
                 });
-            });
         } else {
-            that.addData ({ 'features' : [] });
+            that.d3_update ([], has_zoomed);
         }
     },
     getAttribution () {
@@ -180,23 +111,25 @@ L.D3_geoJSON = L.Layer.extend ({
     setAttribution (attribution) {
         return this.options.attribution = attribution;
     },
-    getBounds () {
-        const [[l, b], [r, t]] = d3.geoPath ().bounds (this.geojson);
-        return L.latLngBounds (L.latLng (b, r), L.latLng (t, l));
-    },
-    on_zoom_end () {
-        this.load_data ();
+    on_zoom_end (event) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.log ('on_zoom_end', event);
+        }
+        this.load_data (true);
         if (this.svg) {
             this.svg.attr ('data-zoom', 'Z'.repeat (this.map.getZoom ()));
         }
     },
-    on_move_end () {
-        this.load_data ();
+    on_move_end (event) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.log ('on_move_end', event);
+        }
+        this.load_data (false);
     },
     d3_reset () {
         // override this
     },
-    d3_update (geojson) {
+    d3_update (geojson, has_zoomed) {
         // override this
     },
 });
@@ -209,173 +142,230 @@ L.Layer_Shields = L.D3_geoJSON.extend ({
         L.D3_geoJSON.prototype.onAdd.call (this, map);
         this.svg.style ('z-index', 1000);
 
-        this.g_lines     = this.g.append ('g').classed ('lines',     true);
-        this.g_highlight = this.g.append ('g').classed ('highlight', true);
-        this.g_shields   = this.g.append ('g').classed ('shields',   true);
+        this.g_lines     = this.g.append ('g').classed ('layer lines',   true);
+        this.g_highlight = this.g.append ('g').classed ('highlight',     true);
+        this.g_shields   = this.g.append ('g').classed ('layer shields', true);
 
         // a circle to highlight a position on the path
-        this.g_highlight.append ('circle').classed ('highlight', true);
+        this.circle = this.g_highlight.append ('circle').classed ('highlight', true);
+
+        this.store = {}; // a data store for data shared between shields and lines
 
         this.svg.on ('click', function (event, d) {
             // event bubbled up from rect thru g.route to svg
             // select the clicked route, deselect all other routes
             // and bubble further up
             if (event.hikemap) {
-                const p = event.hikemap.properties;
-                that.g_lines.selectAll ('g.selected').classed ('selected', false);
-                const g = that.g_lines.select (`g.route[data-relation-id="${p.geo_id}"]`);
-                g.classed ('selected', true);
+                const id = event.hikemap.features[0].id;
+                that.g_lines.selectAll ('g.route')
+                    .classed ('selected', d => d.id === id);
 
-                event.hikemap.unselect = () => {
-                    g.classed ('selected', false);
-                };
-                event.hikemap.set_highlight = (length) => {
-                    const highlight = Number.isFinite (length);
-                    const circle = that.g_highlight.select ('circle.highlight');
-                    if (highlight) {
-                        const geom = event.hikemap.geometry;
-                        const pt   = getPointAtLength (geom.coordinates, length);
-                        const pt2  = that.project_x_y (pt[0], pt[1]);
-                        circle
-                            .attr ('cx', pt2.x)
-                            .attr ('cy', pt2.y);
-                    }
-                    circle.classed ('active', highlight);
-                }
-
-                event.hikemap.g_lines_g_route = g;
                 event.hikemap.g_lines     = that.g_lines;
                 event.hikemap.g_highlight = that.g_highlight;
                 event.hikemap.g_shields   = that.g_shields;
+                event.hikemap.circle      = that.circle;
+
+                event.hikemap.unselect = () => {
+                    that.g_lines.selectAll ('g.route')
+                        .classed ('selected', false);
+                };
+
+                event.hikemap.set_marker = (index) => {
+                    if (index === null) {
+                        that.circle.classed ('active', false);
+                    } else {
+                        const geom = event.hikemap.features[0].geometry;
+                        const pt   = geom.coordinates[index];
+                        const pt2  = that.project (new L.LatLng (pt[1], pt[0]));
+                        that.circle
+                            .attr ('cx', pt2.x)
+                            .attr ('cy', pt2.y);
+                        that.circle.classed ('active', true);
+                    }
+                }
             }
         });
         this.on_zoom_end ();
     },
     d3_reset () {
-        this.g_lines.selectAll   ('g').remove ();
-        this.g_shields.selectAll ('g').remove ();
+        this.g_lines.selectAll     ('g').remove ();
+        this.g_highlight.selectAll ('g').remove ();
+        this.g_shields.selectAll   ('g').remove ();
     },
-    d3_update (geojson) {
-        const that = this;
+    d3_update (features, has_zoomed) {
+        // array of features to show
 
-        // Lines (all lines must lay below shields)
+        if (process.env.NODE_ENV !== 'production') {
+            console.log (`d3_update${has_zoomed ? ' (zoomed)' : ''}: data`, features);
+        }
+        const that    = this;
+        const quad    = d3.quadtree ();
+        const step    = that.my_options.step;
+        const epsilon = step / 10;
 
-        const ul = that.g_lines
+        // Make a <g> for every route that crosses the bounding box
+        // Nested selection see: https://bost.ocks.org/mike/nest/
+
+        const u = that.g
+              .selectAll ('g.layer')
+              .data ([features, features]) // matrix
               .selectAll ('g.route')
-              .data (geojson.features, d => d.properties.geo_id);
+              .data (d => d, d => d.id); // key
 
-        ul.exit ().remove (); // routes that aren't in bbox any more
+        // remove routes that are no longer in view
+        u.exit ().each (function (d, i, nodes) {
+            if (process.env.NODE_ENV !== 'production') {
+                const p = d.properties;
+                console.log (`Dropped route ${p.tags ? p.tags.ref : ''} (${d.id})`);
+            };
+            delete that.store[d.id];
+        });
+        u.exit ().remove ();  // routes that aren't in bbox any more
 
-        const el = ul.enter ()
-              .append ('g')
-              .classed ('route', true)
-              .attr ('data-route-ref',   d => d.properties.tags.ref)
-              .attr ('data-relation-id', d => d.properties.geo_id);
-
-        // we string up the shields at regular intervals along this path
-        el.append ('path');
-
-        el.merge (ul).each (function (d, i, nodes) {
-            const d3g = d3.select (this);
-            const path = d3g.select ('path');
-
-            path.attr ('d', d => {
-                // smooth the path
-                const context = d3.path ();
-                const curve = d3.curveCardinal.tension (0.5) (context);
-                curve.lineStart ();
-                d3.geoPath (that.transform, curveContext (curve)) (d);
-                curve.lineEnd ();
-                return context;
-            });
+        if (has_zoomed) {
+            // remove shields from still existing routes too
+            that.g_shields.selectAll ('use.shield').remove ();
+        }
+        // put still extant shields into quadtree
+        that.g_shields.selectAll ('use.shield').each (function (d, i) {
+            const pt = l_pos.get (this);
+            quad.add ([pt.x, pt.y]);
         });
 
-        // Shields (all shields must lay above lines)
-
-        // for each route in this view => g
-        const u = that.g_shields
-              .selectAll ('g.route')
-              .data (geojson.features, d => d.properties.geo_id);
-
-        u.exit ().remove (); // shields of routes that don't cross bbox any more
-
+        // append <g> for new routes in bounding box
+        // appends in both layers !
         const e = u.enter ()
               .append ('g')
               .classed ('route', true)
               .attr ('data-route-ref',   d => d.properties.tags.ref)
-              .attr ('data-relation-id', d => d.properties.geo_id);
+              .attr ('data-relation-id', d => d.id);
 
-        e.on ('click', function (event, d) {
-            // event bubbled up from shield rect to g.route.
-            // note the g and bubble further up
-            if (event.hikemap) {
-                event.hikemap.g_shields_g_route = d3.select (this);
+        e.each (function (d, i, nodes) {
+            const layer = this.parentNode.classList.contains ('lines') ? 0 : 1;
+            const d3g = d3.select (this);  // g.route
+
+            if (layer === 0) {  // path layer
+                d3g.append ('path')
+                    .on ('mousemove', function (event, d) {
+                        const ll = that.map.containerPointToLatLng (new L.Point (event.x, event.y));
+                        event.hikemarker = {
+                            'index' : tools.getIndexAtPoint (
+                                that.store[d.id].response.features[0].geometry.coordinates, ll),
+                            'g_shields_g_route' : d3.select (this),
+                        };
+                    })
+                    .on ('mouseout', function (event, d) {
+                        event.hikemarker = {
+                            'index' : null,
+                            'g_shields_g_route' : d3.select (this),
+                        };
+                    });
+            }
+            if (layer === 1) {  // shield layer
+                const [symbol, size] = tools.osmc_symbol (d.properties.tags['osmc:symbol']);
+                symbol.attr ('id', `sym_${d.id}`);
+                d3g.node ().appendChild (symbol.node ());
+                l_sym.set (d3g.node (), size);
+
+                d3g.on ('click', function (event, d) {
+                    // set this in event, then let it bubble up
+
+                    event.hikemap = that.store[d.id].response;
+                    event.hikemap.index = null;
+                    event.g_shields_g_route = d3g;
+                });
+            }
+
+            // Lazy load the geojson data.  We store the geojson data in separate
+            // store because changing the joined data would update all nodes on the
+            // next d3_update ().
+            const url = `${that.my_options.vm.$root.api_url}geo/altimetry/`;
+
+            that.store[d.id] = {
+                'promise' : d3.json (url + d.id),
+            };
+            if (process.env.NODE_ENV !== 'production') {
+                const p = d.properties;
+                console.log (`Loaded route ${p.tags.ref} (${d.id})`);
             }
         });
 
-        const quad = d3.quadtree ();
-        const step    = that.my_options.step;
-        const epsilon = step / 10;
+        (has_zoomed ? e.merge (u) : e).each (function (d, i, nodes) {
+            const that_route = this;
+            const d3g  = d3.select (this);  // g.route
+            const layer = this.parentNode.classList.contains ('lines') ? 0 : 1;
+            const data = that.store[d.id];
 
-        e.merge (u).each (function (d, i, nodes) {
-            const p = d.properties;
-            ensure_ref (p.tags);
+            data.promise.then (function (response) {
+                const feature = response.features[0];
+                tools.ensure_ref (feature.properties);
+                tools.ensure_osmc_symbol (feature.properties, that.my_options);
 
-            if (d.geometry.type === 'LineString') {
-                const coords = d.geometry.coordinates.map (pt => {
-                    return that.project_x_y (pt[0], pt[1]);
-                });
-
-                const d3this = d3.select (this);
-
-                // remove current shields
-                d3this.selectAll ('g.shield').remove ();
-
-                // get the path to follow from the g.lines
-                const path = that.g_lines.select (`g.route[data-relation-id="${p.geo_id}"] path`);
-
-                let l = step / 2; // the target length for the next shield
-                let s = 0;        // the current length along the path
-
-                const z = _.zip (coords.slice (0, -1), coords.slice (1));
-                for (const [p1, p2] of z) {
-                    s += Math.sqrt ((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
-                    if (s > l) {
-                        if (quad.find (p2.x, p2.y, 1.5 * epsilon) !== undefined) {
-                            // place is occupied, try again just a little bit further along the path
-                            l += epsilon;
-                            continue;
-                        }
-
-                        // place is free to squat
-                        const g = d3this.append ('g')
-                              .classed ('shield', true)
-                              .attr ('transform', `translate(${p2.x},${p2.y})`);
-                        const rect = g.append ('rect');
-                        const text = g.append ('text')
-                              .text (d => p.tags.ref);
-
-                        g.on ('click', function (event, d) {
-                            // set this in event, then let it bubble up
-                            event.hikemap = d;
-                            event.hikemap.highlight = null;
-                        });
-
-                        const bbox = text.node ().getBBox ();
-                        rect.attr ('width',  bbox.width  + 4);
-                        rect.attr ('height', bbox.height + 4);
-                        rect.attr ('x', -bbox.width  / 2 - 2);
-                        rect.attr ('y', -bbox.height / 2 - 3);
-
-                        quad.add ([p2.x, p2.y]); // mark place as occupied
-                        l += step; // place the next shield a good distance further along
-                    }
-                };
-            } else {
-                if (process.env.NODE_ENV !== 'production') {
-                    console.warn (`Error: geometry of type ${d.geometry.type} in ${p.tags.ref}`);
+                if (layer === 0) {
+                    const path = d3g.select ('path');
+                    path.attr ('d', d => {
+                        // smooth the path
+                        const context = d3.path ();
+                        const curve = d3.curveCardinal.tension (0.5) (context);
+                        curve.lineStart ();
+                        d3.geoPath (that.transform, tools.curveContext (curve)) (response);
+                        curve.lineEnd ();
+                        return context;
+                    });
                 }
-            }
+                if (layer === 1) {
+                    data.response = response;
+
+                    try {
+                        feature.geometry = tools.stitch (feature.geometry);
+                        tools.add_m_dimension (feature.geometry.coordinates);
+                    } catch (e) {
+                        if (process.env.NODE_ENV !== 'production') {
+                            const p = d.properties;
+                            console.warn (`${e} in route ${p.tags.ref} (${d.id})`);
+                        }
+                        return;
+                    }
+
+                    const coords = feature.geometry.coordinates.map (pt => {
+                        return that.project (new L.LatLng (pt[1], pt[0]));
+                    });
+
+                    let l = step / 2; // the target length for the next shield
+                    let s = 0;        // the current length along the path
+
+                    const z = _.zip (coords.slice (0, -1), coords.slice (1));
+                    for (const [p1, p2] of z) {
+                        s += Math.sqrt ((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+                        if (s > l) {
+                            if (quad.find (p2.x, p2.y, 1.5 * epsilon) !== undefined) {
+                                // place is occupied, try again just a little bit further along the path
+                                l += epsilon;
+                                continue;
+                            }
+
+                            // place is free to squat
+                            const size = l_sym.get (d3g.node ());
+                            if (size) {
+                                const g = d3g.append ('use')
+                                      .classed ('shield', true)
+                                      .attr ('href', `#sym_${d.id}`)
+                                      .attr ('width',  size.width)
+                                      .attr ('height', size.height)
+                                      .attr (
+                                          'transform',
+                                          `translate(${p2.x - size.width / 2},${p2.y - size.height / 2})`
+                                      );
+                                l_pos.set (g.node (), p2);
+                                quad.add ([p2.x, p2.y]); // mark place as occupied
+                            }
+                            l += step; // place the next shield a good distance further along
+                        }
+                    }
+                }
+            }).catch (function (error) { // promise
+                console.error (error);
+            });
         });
     },
 })
@@ -385,7 +375,7 @@ L.Control.Info_Pane = L.Control.extend ({
 	    this._div = L.DomUtil.create ('div', 'info-pane-control');
         L.DomEvent.disableClickPropagation (this._div);
         L.DomEvent.disableScrollPropagation (this._div);
-	    $ (this._div).append ($ ('div.info-panels'));
+	    d3.select (this._div).append ('div').classed ('info-panels');
 	    return this._div;
     },
 
@@ -396,6 +386,7 @@ L.Control.Info_Pane = L.Control.extend ({
 export default {
     'props' : {
         'selected' : Object,
+        'marker'   : Number,
     },
     'data'  : function () {
         return {
@@ -411,6 +402,7 @@ export default {
             'layers_shown',
             'geo_layers',
             'tile_layers',
+            'wms_layers',
         ])
     },
     'watch' : {
@@ -422,6 +414,12 @@ export default {
         'selected' : function () {
             this.on_selected ();
         },
+        'marker' : function () {
+            const sel = this.selected;
+            if (sel) {
+                sel.set_marker (this.marker);
+            }
+        },
         $route (to, from) {
             this.set_view (to.hash);
         },
@@ -430,7 +428,7 @@ export default {
         init_layers () {
             const vm = this;
 
-            for (const layer_info of vm.tile_layers.layers) {
+            for (const layer_info of vm.tile_layers) {
                 const layer = L.tileLayer (
                     layer_info.url.replace ('{api}', vm.$root.api_url),
                     {
@@ -447,7 +445,25 @@ export default {
                 }
             }
 
-            for (const layer_info of vm.geo_layers.layers) {
+            for (const layer_info of vm.wms_layers) {
+                const layer = L.tileLayer.wms (
+                    layer_info.url.replace ('{api}', vm.$root.api_url),
+                    {
+                        'layers'      : layer_info.wms_layer,
+                        'attribution' : layer_info.attribution,
+                    }
+                );
+                if (layer_info.type === 'base') {
+                    vm.base_layers[layer_info.title] = layer;
+                    if (Object.keys (vm.base_layers).length === 1) {
+                        layer.addTo (vm.map);
+                    }
+                } else {
+                    vm.overlay_layers[layer_info.title] = layer;
+                }
+            }
+
+            for (const layer_info of vm.geo_layers) {
                 const sublayers = [];
                 for (const sublayer_info of layer_info.layers) {
                     const sublayer = new L.Layer_Shields (
@@ -482,7 +498,7 @@ export default {
             vm.map.options.minZoom = vm.tile_layers.min_zoom;
             vm.map.options.maxZoom = vm.tile_layers.max_zoom;
 
-            if (!vm.set_view (this.$route.hash)) {
+            if (!vm.set_view (this.$route.hash, true)) {
                 vm.zoom_extent ();
             }
         },
@@ -502,23 +518,31 @@ export default {
                 });
             }
         },
-        set_view (hash) {
+        make_hash (ll, zoom) {
+            const lat = ll.lat.toFixed (5);
+            const lng = ll.lng.toFixed (5);
+            return `#map=${zoom}/${lat}/${lng}`;
+        },
+        set_view (hash, force) {
             const re = new RegExp ('^#map=([0-9]+)/([.0-9]+)/([.0-9]+)');
             const m = re.exec (hash);
             if (m) {
                 const ll = new L.LatLng (m[2], m[3]);
-                this.map.setView (ll, parseFloat (m[1]));
+                const zoom = parseFloat (m[1]);
+                if (force || hash != this.make_hash (ll, zoom)) {
+                    this.map.setView (ll, zoom);
+                }
             }
             return m;
+        },
+        on_click (event) {
         },
         on_move_end (event) {
             // adjust the url in the navigation bar
             // after scrolling or zooming
             const zoom  = this.map.getZoom ();
             const c     = this.map.getCenter ();
-            const lat   = c.lat.toFixed (5);
-            const lng   = c.lng.toFixed (5);
-            const hash  = `#map=${zoom}/${lat}/${lng}`;
+            const hash  = this.make_hash (c, zoom);
 
             if (hash != this.$route.hash) {
                 this.$router.replace ({
@@ -526,7 +550,6 @@ export default {
                     'hash' : hash,
                 });
             }
-            this.$emit ('move_zoom', this.map);
         },
         on_selected () {
         },
@@ -542,14 +565,7 @@ export default {
         vm.map.on ('moveend', this.on_move_end);
         vm.map.on ('zoomend', this.on_move_end);
 
-        vm.set_view (vm.$route.hash);
-
-        vm.$watch (function () {
-            return vm.selected && vm.selected.highlight;
-        }, function () {
-            const sel = vm.selected;
-            sel.set_highlight (sel.highlight);
-        });
+        vm.set_view (vm.$route.hash, true);
     },
 };
 </script>
@@ -577,9 +593,10 @@ svg.hikemap {
     overflow: visible;
     background-color: transparent;
 
-    text {
-        dominant-baseline: middle;
-        text-anchor: middle;
+    g.routes {
+        path, g {
+            display: none;
+        }
     }
 
     g.lines {
@@ -588,14 +605,17 @@ svg.hikemap {
         path {
             stroke: var(--hikemap-color);
             stroke-width: 10px;
-            fill: transparent;
+            fill: none;
             stroke-linecap: round;
             stroke-linejoin: round;
             shape-rendering: geometricPrecision;
+            pointer-events: none;
         }
 
         g.route.selected path {
             stroke-width: 20px;
+            cursor: pointer;
+            pointer-events: stroke;
         }
     }
 
@@ -606,31 +626,30 @@ svg.hikemap {
             fill: transparent;
             r: 20px;
             opacity: 0;
+            pointer-events: none;
             &.active {
                 opacity: 1;
             }
         }
     }
 
-    g.shields {
-    }
+}
 
-    g.shield {
-        rect {
-            stroke: var(--hikemap-color);
-            fill: #eee;
-            stroke-width: 1px;
-            cursor: pointer;
+/* used as symbol */
+
+g.shield {
+    cursor: pointer;
+    rect {
+        &.rounded {
             rx: 2pt;
             ry: 2pt;
         }
+    }
 
-        text {
-            fill: var(--hikemap-color);
-            pointer-events: none;
-            font: bold 12px sans-serif;
-            text-align: center;
-        }
+    text {
+        dominant-baseline: middle;
+        text-anchor: middle;
+        font: bold 12px sans-serif;
     }
 }
 

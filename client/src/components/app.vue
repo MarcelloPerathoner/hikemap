@@ -43,6 +43,7 @@ const store = new Vuex.Store ({
         'layers_shown' : [],                 // geo layers shown
         'geo_layers'   : { 'layers' : [] },  // geo layers available
         'tile_layers'  : { 'layers' : [] },  // tile layers
+        'wms_layers'   : { 'layers' : [] },  // wms layers
     },
     'mutations' : {
         toolbar_range (state, data) {
@@ -59,6 +60,7 @@ const store = new Vuex.Store ({
         'layers_shown' : state => state.layers_shown,
         'geo_layers'   : state => state.geo_layers,
         'tile_layers'  : state => state.tile_layers,
+        'wms_layers'   : state => state.wms_layers,
     },
 });
 
@@ -76,13 +78,13 @@ export default {
     mounted () {
         const vm = this;
         const xhrs = [
-            d3.json (vm.build_full_api_url ('geo/'),  { 'credentials' : 'include' }),
-            d3.json (vm.build_full_api_url ('tile/'), { 'credentials' : 'include' }),
+            d3.json (vm.build_full_api_url ('info/'),  { 'credentials' : 'include' }),
         ];
         Promise.all (xhrs).then (function (responses) {
-            const [json_geo, json_tile] = responses;
-            vm.$store.state.geo_layers  = json_geo;
-            vm.$store.state.tile_layers = json_tile; // last! triggers map.vue.init_layers
+            const [json_info] = responses;
+            vm.$store.state.geo_layers  = json_info.geo_layers;
+            vm.$store.state.wms_layers  = json_info.wms_layers;
+            vm.$store.state.tile_layers = json_info.tile_layers; // last! triggers map.vue.init_layers
         });
     },
 };

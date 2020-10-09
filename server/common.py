@@ -21,16 +21,6 @@ def make_json_response (json = None, status = 200):
     })
 
 
-def make_rowjson_response (rows, fields, status = 200):
-    fields = collections.namedtuple ('JSONFields', fields)
-
-    json = { 'data' : [fields._make (row)._asdict () for row in rows] }
-
-    return flask.make_response (flask.json.jsonify (json), status, {
-        'Content-Type' : 'application/json;charset=utf-8',
-    })
-
-
 def make_geojson_response (rows, fields, geometry_field_name = 'geom', id_field_name = 'geo_id'):
     """Make a geoJSON response.
 
@@ -53,7 +43,7 @@ def make_geojson_response (rows, fields, geometry_field_name = 'geom', id_field_
             'properties' : properties,
         }
         del properties[geometry_field_name]
-        # del properties[id_field_name]
+        del properties[id_field_name]
         features.append (feature)
 
     response = flask.make_response (flask.json.jsonify ({

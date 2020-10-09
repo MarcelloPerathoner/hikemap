@@ -10,6 +10,8 @@ DROP VIEW IF EXISTS local_names;
 DROP VIEW IF EXISTS all_routes_view CASCADE;
 DROP VIEW IF EXISTS planet_osm_line_view CASCADE;
 DROP VIEW IF EXISTS relations_of;
+DROP VIEW IF EXISTS snapshot.way_super_routes_view;
+DROP VIEW IF EXISTS ways_in_routes;
 DROP VIEW IF EXISTS route_lines;
 DROP VIEW IF EXISTS check_routes;
 
@@ -220,14 +222,17 @@ $$ LANGUAGE SQL IMMUTABLE;
 ALTER TABLE snapshot.ways ADD COLUMN linestringz geometry (LineStringZ, 4326);
 
 CREATE OR REPLACE VIEW ways_in_routes AS
-  SELECT r.id AS rel_id, rm.sequence_id, w.id AS way_id, w.linestring, w.linestringz, r.tags AS rel_tags
+  SELECT r.id AS rel_id, rm.sequence_id, rm.member_role,
+         w.id AS way_id, w.linestring, w.linestringz, r.tags AS rel_tags
   FROM snapshot.ways w
     JOIN snapshot.relation_members rm ON rm.member_id   = w.id
     JOIN snapshot.relations r         ON rm.relation_id = r.id
-  WHERE (rm.member_type, rm.member_role) = ('W', '') AND
-         r.tags->'type' = 'route' AND
-         r.tags->'route' IN  ('hiking', 'bicycle', 'mtb', 'piste', 'bus')
+  WHERE rm.member_type = 'W' AND
+        r.tags->'type' = 'route' AND
+        r.tags->'route' IN  ('hiking', 'bicycle', 'mtb', 'piste', 'bus')
   ORDER BY r.id, rm.sequence_id;
+
+------
 
 WITH points2d AS (
   SELECT DISTINCT way_id,
@@ -238,21 +243,22 @@ WITH points2d AS (
 
 points3d AS (
   SELECT way_id,
-  ST_MakeLine (ST_SetSRID (ST_MakePoint (
+  ST_MakeLine (ST_MakePoint (
     ST_X ((p.geom).geom),
     ST_Y ((p.geom).geom),
-    COALESCE (ST_Value (dtm.rast, 1, (p.geom3857).geom), 0)
-  ), 4326) ORDER BY (p.geom).path) AS way_line
+    COALESCE (round (ST_Value (dtm.rast, 1, (p.geom3857).geom)::numeric, 1), 0)
+  ) ORDER BY (p.geom).path) AS way_line
   FROM points2d p
-    JOIN raster_dtm dtm ON ST_Intersects (dtm.rast, (p.geom3857).geom)
+    LEFT JOIN raster_dtm dtm ON ST_Intersects (dtm.rast, (p.geom3857).geom)
   GROUP BY way_id
 )
 
 UPDATE snapshot.ways w
-  SET linestringz = way_line
+  SET linestringz = ST_SetSRID (way_line, 4326)
   FROM points3d p
   WHERE w.id = p.way_id;
 
+------
 
 CREATE VIEW check_routes AS
 SELECT r.id                  AS rel,

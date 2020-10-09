@@ -8,7 +8,6 @@
  * @author Marcello Perathoner
  */
 
-import $     from 'jquery';
 import Vue   from 'vue';
 import axios from 'axios';
 
@@ -74,8 +73,6 @@ Vue.prototype.put = function (url, data = {}) {
  */
 
 Vue.prototype.$trigger = function (name, data) {
-    // $ (this.$el).trigger (event, data);
-
     const event = new CustomEvent (name, {
         'bubbles' : true,
         'detail'  : { 'data' : data },
@@ -85,15 +82,3 @@ Vue.prototype.$trigger = function (name, data) {
 
 /* eslint-disable no-new */
 new Vue (app);
-
-$ (document).off ('.data-api'); // turn off bootstrap's data api
-
-// The browser triggers hashchange only on window.  We want it on every app.
-$ (window).on ('hashchange', function () {
-    // Concoct an event that you can actually catch with vue.js. (jquery events
-    // are not real native events.)  This event does not bubble.
-    const event = new CustomEvent ('hashchange');
-    $ ('.want_hashchange').each (function (i, e) {
-        e.dispatchEvent (event);
-    });
-});

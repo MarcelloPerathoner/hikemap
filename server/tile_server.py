@@ -175,17 +175,3 @@ def tile_png (mapid, zoom, xtile, ytile):
         'Content-Type'  : 'image/png',
         'Cache-Control' : 'public, max-age=3600',
     })
-
-
-@tile_app.route ('/')
-def info_json ():
-    """ Info endpoint: send information about server and available layers. """
-
-    conf = current_app.config
-    i = {
-        'title'    : 'Hikemap Tile Server',
-        'min_zoom' : conf['TILE_MIN_ZOOM'],
-        'max_zoom' : conf['TILE_MAX_ZOOM'],
-        'layers'   : conf['TILE_LAYERS'],
-    }
-    return common.make_json_response (i, 200)

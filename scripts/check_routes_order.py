@@ -40,7 +40,7 @@ def ways_ok (ways, route):
     if route in ('bicycle', 'mtb'):
         check_oneway = lambda tags: tags.get ('oneway:bicycle', tags.get ('oneway', tags.get ('roundabout', 'no'))) == 'yes'
 
-    for n, way in enumerate (ways):
+    for way in ways:
         oneway = check_oneway (way.tags)
 
         if oneway:
