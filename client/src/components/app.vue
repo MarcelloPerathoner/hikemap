@@ -13,7 +13,7 @@
 import Vue          from 'vue';
 import VueRouter    from 'vue-router';
 import Vuex         from 'vuex';
-import BootstrapVue from 'bootstrap-vue';
+import { BootstrapVue, BootstrapVueIcons } from 'bootstrap-vue';
 
 import _            from 'lodash';
 import * as d3      from 'd3';
@@ -24,6 +24,7 @@ import maps         from './maps.vue';
 Vue.use (VueRouter);
 Vue.use (Vuex);
 Vue.use (BootstrapVue);
+Vue.use (BootstrapVueIcons);
 
 const routes = [
     {

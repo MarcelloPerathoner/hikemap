@@ -35,13 +35,6 @@ export function ensure_ref (d) {
     return d;
 }
 
-export function ensure_osmc_symbol (d, layer_info) {
-    if (!d.tags['osmc:symbol']) {
-        d.tags['osmc:symbol'] = `${layer_info.color}:white:${d.tags.ref}:${layer_info.color}`;
-    }
-    return d;
-}
-
 export function curveContext (curve) {
     // https://observablehq.com/@d3/context-to-curve
     return {
@@ -74,6 +67,28 @@ export function add_m_dimension (coordinates) {
     return coordinates;
 }
 
+export function accumulate_ascent_descent (coordinates) {
+    // accumulate ascent and descent
+
+    let asc  = 0;
+    let desc = 0;
+
+    if (coordinates.length > 0) {
+        let last_pt = coordinates[0];
+
+        for (const pt of coordinates) {
+            const delta = pt[2] - last_pt[2];
+            if (delta > 0) {
+                asc += delta;
+            } else {
+                desc += delta;
+            }
+            last_pt = pt;
+        }
+    }
+    return { 'ascent' : asc, 'descent' : desc };
+}
+
 export function getIndexAtLength (coordinates, length) {
     // Find index of the point at distance length from the start of the
     // linestring.  Needs coordinates with an M dimension.
@@ -102,6 +117,59 @@ export function getIndexAtPoint (coordinates, latlng) {
         }
     }
     return index;
+}
+
+export function sort_lines (geometry) {
+    // reverses the linestrings in the input multilinestring that are inverted
+    // so that every linestring starts where the previous one ended.
+
+    if (geometry.type === 'LineString') {
+        return;
+    }
+
+    if (geometry.type !== 'MultiLineString') {
+        throw `Error: cannot not reverse geometry of type ${geometry.type}`;
+    }
+
+    // just one line, no processing required
+    if (geometry.coordinates.length < 2) {
+        return;
+    }
+
+    function eq (a, b) {
+        return (a[0] === b[0]) && (a[1] === b[1]);
+    }
+
+    let le = null;  // last way's end
+    let first_way = geometry.coordinates[0]; // temp store of first way
+
+    for (const way of geometry.coordinates) {
+        let s = way[0];
+        let e = way[way.length - 1];
+
+        if (first_way) {
+            // special treatment of first way
+            // we can only do this once the second way is known
+            if (eq (first_way[0], s) || eq (first_way[0], e)) {
+                first_way.reverse ();
+            }
+            le = first_way[first_way.length - 1];
+            first_way = null;
+        }
+
+        if (eq (le, s)) {
+            le = way[way.length - 1];
+        } else {
+            if (eq (le, e)) {
+                way.reverse ();
+                le = way[way.length - 1];
+            } else {
+                // a new string of ways has started
+                first_way = way;
+                le = null;
+            }
+        }
+    }
 }
 
 export function stitch (geometry) {
@@ -202,47 +270,93 @@ export function wrap (text, width) {
     });
 }
 
+export function ensure_osmc_symbol (d, layer_info) {
+    if (!d.tags['osmc:symbol']) {
+        d.tags['osmc:symbol'] = `${layer_info.color}:white:${layer_info.color}_frame:${d.tags.ref}:${layer_info.color}`;
+    }
+    return d;
+}
+
 function draw_osmc_symbol (ground, size) {
     if (!ground) return null;
 
-    const [color, what] = ground.split ('_');
+    let [color, what, mode] = ground.split ('_');
     const g = d3.create ('svg:g')
           .attr ('stroke', 'none')
           .attr ('fill',   color);
     g.append ('desc').text (ground);
 
     if (!what) {
-        g   .append ('rect')
+        what = 'rectangle';
+    }
+    if (what === 'frame') {
+        what = 'rectangle';
+        mode = 'line';
+    }
+    if (what === 'circle') {
+        what = 'round';
+        mode = 'line';
+    }
+
+    if (what === 'rectangle') {
+        g.append ('rect')
             .classed ('rounded', true)
+            .attr ('x', -size.width / 2)
+            .attr ('y', -size.height / 2)
             .attr ('width',  size.width)
             .attr ('height', size.height);
     }
 
     if (what == 'bar') { // --
         g.append ('rect')
-            .attr ('width',  size.width + 4)
-            .attr ('height', size.height)
-            .attr ('y', size.dy / 2);
-        size.width  += 4;
-        size.height += size.dy;
+            .attr ('x', -size.width / 2)
+            .attr ('y', -size.height / 2)
+            .attr ('width',  size.width)
+            .attr ('height', size.height);
+        size.height *= 2;
     }
 
     if (what == 'stripe') { // |
         g.append ('rect')
-            .attr ('width',  size.width + 4)
-            .attr ('height', size.height)
-            .attr ('x', size.dx);
-        size.width += 4 + 2 * size.dx;
+            .attr ('x', -size.width / 2)
+            .attr ('y', -size.height / 2)
+            .attr ('width',  size.width)
+            .attr ('height', size.height);
+        size.width *= 2;
     }
 
-    if (what == 'circle') {
-        const r = Math.max (size.width, size.height) / 2;
+    if (what === 'round') {
+        const d = Math.max (size.width, size.height);
         g.append ('circle')
-            .attr ('r', r)
-            .attr ('cx', r)
-            .attr ('cy', r);
-        size.width  = 2 * r;
+            .attr ('r', d / 2);
+        size.width  = d;
+        size.height = d;
+    }
+
+    if (what === 'dot') {
+        const d = Math.max (size.width, size.height) / 2;
+        g.append ('circle')
+            .attr ('r', d / 2);
+        size.width  = d;
+        size.height = d;
+    }
+
+    if (what === 'triangle') {
+        const r = Math.max (size.width, size.height);
+        const x = r * 0.866;
+        const y = r * 0.5;
+        g.append ('path')
+            .attr ('d', `M0,${-r}L${-x},${y}H${x}Z`);
+        size.width  = 2 * x;
         size.height = 2 * r;
+    }
+
+    if (mode === 'line') {
+        g   .attr ('stroke', color)
+            .attr ('stroke-width', 2)
+            .attr ('fill', 'transparent');
+        size.width  += 2;
+        size.height += 2;
     }
     return g.node ();
 }
@@ -305,8 +419,8 @@ export function osmc_symbol (osmc_symbol, elem = 'svg:symbol') {
     const letters = [... text.matchAll (/\p{L}/gu)].length;
 
     const size = {
-        'width'  : digits * dx + letters * (dx + 2),
-        'height' : dy,
+        'width'  : digits * dx + letters * (dx + 2) + 4,
+        'height' : dy + 2,
         'dx'     : dx,
         'dy'     : dy,
     };
@@ -322,12 +436,11 @@ export function osmc_symbol (osmc_symbol, elem = 'svg:symbol') {
     if (text) {
         g.append ('text')
             .attr ('fill', textcolor)
-            .attr ('x', size.width  / 2)
-            .attr ('y', size.height / 2 + 1)
+            .attr ('y', 1)
             .text (text);
     }
 
-    sym.attr ('viewBox', `0 0 ${size.width} ${size.height}`);
+    sym.attr ('viewBox', `${-size.width/2} ${-size.height/2} ${size.width} ${size.height}`);
 
     return [sym, size];
 }

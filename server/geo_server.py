@@ -51,7 +51,9 @@ def init_query_params (conn, **kw):
     return params
 
 
-def _hikemap_altimetry (route_id):
+@geo_app.route ('/altimetry/<int:route_id>/')
+@geo_app.route ('/altimetry/<int:route_id>/<alternate>')
+def altimetry (route_id, alternate = ''):
     """ Return route altimetry.
 
     This always returns altimetry for the whole route.
@@ -59,24 +61,18 @@ def _hikemap_altimetry (route_id):
 
     with current_app.config.dba.engine.begin () as conn:
         res = execute (conn, """
-        SELECT ST_AsGeoJSON (ST_Collect (linestringz ORDER BY sequence_id))::json AS geom,
-               rel_id AS geo_id,
+        SELECT ST_AsGeoJSON (ST_Collect (linestringz ORDER BY sequence_id), 6)::json AS geom,
+               rel_id || '/' || member_role AS geo_id,
+               member_role,
                rel_tags AS tags
         FROM ways_in_routes w
-        WHERE rel_id = :relation_id AND member_role = ''
-        GROUP BY rel_id, rel_tags
-        """, init_query_params (conn, relation_id = route_id))
+        WHERE rel_id = :relation_id AND member_role = :alt
+        GROUP BY rel_id, rel_tags, member_role
+        """, init_query_params (conn, relation_id = route_id, alt = alternate))
 
         return common.make_geojson_response (
-            res, 'geom, geo_id, tags'
+            res, 'geom, geo_id, member_role, tags'
         )
-
-
-@geo_app.route ('/altimetry/<int:route_id>')
-def altimetry (route_id):
-    """ Return route altimetry. """
-
-    return _hikemap_altimetry (route_id)
 
 
 @geo_app.route ('/routes/<route_type:route_type>.json')
@@ -87,16 +83,17 @@ def routes_geojson (route_type):
     with current_app.config.dba.engine.begin () as conn:
         res = execute (conn, """
         SELECT NULL as geom,
-               rel_id   AS geo_id,
+               rel_id || '/' || member_role AS geo_id,
+               member_role,
                rel_tags AS tags
         FROM ways_in_routes w
         WHERE linestring && {bbox}
           AND rel_tags->'route' = :route_type
-        GROUP BY rel_id, rel_tags
+        GROUP BY rel_id, rel_tags, member_role
         """, init_query_params (conn, route_type = route_type))
 
         return common.make_geojson_response (
-            res, 'geom, geo_id, tags'
+            res, 'geom, geo_id, member_role, tags'
         )
 
 

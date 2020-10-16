@@ -17,11 +17,8 @@
         "axios": "^0.20",
         "bootstrap": "^4.1",
         "bootstrap-vue": "^2.0.0-rc.11",
-        "chart.js": "^2.9.3",
-        "chartjs-plugin-annotation": "^0.5.7",
-        "chartjs-plugin-crosshair": "^1.1.6",
         "d3": "^6.2",
-        "frappe-charts": "^1.1.0",
+        "d3-geo-projection": "^3.0.0",
         "jquery": "^3.1.1",
         "jquery-ui": "^1.12.0",
         "leaflet": "^1.4",
@@ -78,8 +75,8 @@
         "stylelint-config-standard": "*",
         "vue-eslint-parser": "*",
         "vue-loader": "*",
-        "webpack": "^5.0.0-rc.0",
-        "webpack-cli": "*",
+        "webpack": "^5",
+        "webpack-cli": "^3",
         "webpack-dev-server": "*",
         "webpack-merge": "*"
     }

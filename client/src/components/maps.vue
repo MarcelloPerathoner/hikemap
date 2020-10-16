@@ -10,7 +10,8 @@
                   />
     </div>
 
-    <my-sidebar :selected="selected"
+    <my-sidebar v-bind:style="sidebar_style"
+                :selected="selected"
                 :marker="marker"
                 @hidden="on_sidebar_hidden"
                 @mousemove.native="on_mousemove"
@@ -47,6 +48,8 @@ import axios     from 'axios';
 import map      from './map.vue';
 import sidebar  from './widgets/sidebar.vue';
 
+import * as tools from '../js/tools.js';
+
 const EDITORS = [
     {
         'id'    : 'iD',
@@ -78,11 +81,12 @@ export default {
             'toolbar' : {
                 'layers_shown' : ['hikemap'],
             },
-            'info_panels' : [],
-            'next_id'     : 1,
-            'editors'     : EDITORS,
-            'selected'    : null,
-            'marker'      : null,
+            'sidebar_style' : {},
+            'info_panels'   : [],
+            'next_id'       : 1,
+            'editors'       : EDITORS,
+            'selected'      : null,
+            'marker'        : null,
         };
     },
     'computed' : {
@@ -99,12 +103,26 @@ export default {
     'methods' : {
         on_click (event) {
             if (event.hikemap) {
-                this.selected = event.hikemap;
+                // event bubbled up with extra info attached
+                const feature = event.hikemap.features[0];
+                try {
+                    feature.geometry = tools.stitch (feature.geometry);
+                } catch (e) {
+                    if (process.env.NODE_ENV !== 'production') {
+                        console.warn (`${e} in route ${feature.properties.tags.ref} (${feature.id})`);
+                    }
+                }
+                this.sidebar_style = {
+                    '--hikemap-color'      : event.hikemap.layer_options.color,
+                    '--hikemap-background' : event.hikemap.layer_options.background,
+                };
+                this.selected = event.hikemap; // opens the sidebar
             }
         },
         on_mousemove (event) {
             if (event.hikemarker) {
-                this.marker = event.hikemarker.index;
+                const geom = this.selected.features[0].geometry;
+                this.marker = tools.getIndexAtPoint (geom.coordinates, event.hikemarker.latlng);
             }
             if (event.hikechart) {
                 this.marker = event.hikechart.index;
@@ -112,19 +130,21 @@ export default {
         },
         on_mouseout (event) {
             if (event.hikemarker) {
-                this.marker = event.hikemarker.index;
+                this.marker = null;
             }
             if (event.hikechart) {
-                this.marker = event.hikechart.index;
+                this.marker = null;
             }
         },
         on_sidebar_hidden (event) {
-            this.selected.unselect ();
-            this.selected = null;
+            if (this.selected) {
+                this.selected.unselect ();
+                this.selected = null;
+            }
         },
-        edit_map_with (id) {
+        edit_map_with (editor_id) {
             for (const item of EDITORS) {
-                if (item.id === id) {
+                if (item.id === editor_id) {
                     if (item.local) {
                         const b = this.$refs.map.map.getBounds ();
                         const params = {
@@ -133,6 +153,9 @@ export default {
                             'top'    : b.getNorth (),
                             'bottom' : b.getSouth (),
                         };
+                        if (this.selected) {
+                            params.select = `relation${this.selected.features[0].id}`;
+                        }
                         axios.get (item.href, { 'params' : params })
                             .catch (function (error) {
                                 alert ('Could not open JOSM: ' + error);

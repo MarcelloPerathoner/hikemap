@@ -30,7 +30,7 @@ def make_geojson_response (rows, fields, geometry_field_name = 'geom', id_field_
 
     """
 
-    fields = collections.namedtuple ('GeoJSONFields', fields)
+    fields = collections.namedtuple ('_GeoJSONFields', fields)
 
     features = []
     for row in rows:

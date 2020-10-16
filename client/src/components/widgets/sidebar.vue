@@ -1,28 +1,59 @@
 <template>
-  <b-sidebar right shadow lazy
-             id="sidebar-right" class="vm-sidebar"
-             :no-close-on-route-change="true" v-model="is_open"
-             @hidden="$emit ('hidden')">
+<b-sidebar right no-header shadow lazy
+           id="sidebar-right" class="vm-sidebar"
+           :no-close-on-route-change="true" v-model="is_open"
+           @hidden="$emit ('hidden')">
+  <template v-slot:default="{ hide }">
 
-    <template v-slot:title="">
-      <span class="subtitle">{{ subtitle }}</span>
-      <my-shield :osmc_symbol="osmc_symbol" />
-    </template>
+    <div class="px-3">
 
-    <div class="px-3 py-2">
-      <h3>Height Profile</h3>
+      <div class="d-flex justify-content-between py-3">
+        <b-button-close @click="hide"><b-icon-x /></b-button-close>
+        <div class="d-flex flex-column justify-content-center">
+          <span class="role">{{ props.member_role }}</span>
+        </div>
+        <my-shield :osmc_symbol="osmc_symbol" />
+      </div>
 
-      <my-chart id="0" :data='chart_data' :height='250' :marker="marker" />
+      <p class="subtitle">{{ props.tags.name }}</p>
 
-      <p>Height: {{ format_height (height) }}</p>
+      <div class="py-2">
+        <my-chart id="0" :data='chart_data' :height='250' :marker="marker" />
 
-      <p>Total Length: {{ format_km (length) }}</p>
+        <div class="d-flex justify-content-between py-2">
+          <p class="my-0">
+            Length: {{ format_km (length) }}<br>
+            Height: {{ format_ele (height) }}
+          </p>
+          <b-button class="reverse" variant="none" size="sm" @click="reverse">
+            <b-icon-caret-left />
+            <b-icon-caret-right />
+          </b-button>
+        </div>
 
-      <h3 class="mt-3">Route Data</h3>
+        <p>
+          Total Length: {{ format_km (ad.length) }}<br>
+          Ascent: {{ format_ele (ad.ascent) }}<br>
+          Descent: {{ format_ele (-ad.descent) }}
+        </p>
 
-      <b-table small :items="table_items"></b-table>
+        <h3 class="mt-3">Route Data</h3>
+
+        <b-table small :items="table_items" :fields="['tag', 'value']">
+          <template v-slot:cell(value)="{ item }">
+            <template v-if="item.url">
+              <a :href="item.url">{{ item.value }}</a>
+            </template>
+            <template v-else>
+              {{ item.value }}
+            </template>
+          </template>
+
+        </b-table>
+      </div>
     </div>
-  </b-sidebar>
+  </template>
+</b-sidebar>
 </template>
 
 <script>
@@ -36,8 +67,10 @@
 import { mapGetters } from 'vuex'
 
 import * as d3 from 'd3';
-import chart   from './chart_js.vue';
-import shield  from './shield.vue';
+
+import chart      from './chart.vue';
+import shield     from './shield.vue';
+import * as tools from '../../js/tools.js';
 
 export default {
     'components' : {
@@ -55,18 +88,15 @@ export default {
     'data'  : function () {
         return {
             'chart_data' : [],
-            'length'     : 0,     // the length of the route in km
+            'length'     : 0,     // the current length at crosshair cursor
+            'height'     : 0,     // the current height at crosshair cursor
             'is_open'    : false, // v-model
-            'height'     : 0,
+            'ad'         : {},
         };
     },
     'computed' : {
-        'subtitle' : function () {
-            const props = this.selected && this.selected.features[0].properties;
-            if (props) {
-                return props.tags.name;
-            }
-            return '';
+        'props' : function () {
+            return (this.selected && this.selected.features[0].properties) || {};
         },
         'osmc_symbol' : function () {
             const props = this.selected && this.selected.features[0].properties;
@@ -79,9 +109,31 @@ export default {
             const feature = this.selected && this.selected.features[0];
             if (feature) {
                 const o = Object.entries (feature.properties.tags).map (d => {
-                    return { 'tag' : d[0], 'value' : d[1] };
+                    if (d[0] === 'url' || d[0] === 'website') {
+                        return { 'tag' : d[0], 'value' : d[1], 'url' : d[1] };
+                    }
+                    if (d[0] === 'wikidata') {
+                        return { 'tag' : d[0], 'value' : d[1], 'url' : `https://www.wikidata.org/wiki/${d[1]}` };
+                    }
+                    if (d[0] === 'wikipedia') {
+                        const m = d[1].match (/^(?:(\w+):)?\s*(.+)$/);
+                        if (m) {
+                            const lang = m[1] || 'en';
+                            return {
+                                'tag'   : d[0],
+                                'value' : m[2],
+                                'url'   : `https://${lang}.wikipedia.org/wiki/${m[2]}`
+                            };
+                        }
+                    }
+                    return { 'tag' : d[0], 'value' : d[1], 'url' : null };
                 });
-                o.push ({ 'tag' : 'osm:id' , 'value' : feature.id });
+                const osm_id = feature.id.split ('/')[0];
+                o.push ({
+                    'tag'   : 'osm:id' ,
+                    'value' : osm_id,
+                    'url'   : `https://www.openstreetmap.org/relation/${osm_id}`,
+                });
                 return o;
             }
             return [];
@@ -89,31 +141,48 @@ export default {
     },
     'watch' : {
         'selected' : function () {
-            if (this.selected) {
-                this.update_chart ();
-            }
-            this.is_open = !!this.selected;
+            const vm = this;
+            vm.update_chart ();
+            vm.is_open = !!vm.selected;
         },
         'marker' : function () {
-            if (this.marker === null) {
-                this.height = null;
-            } else {
-                if (this.selected) {
-                    this.height = this.selected.features[0].geometry.coordinates[this.marker][2]; // Z
+            const vm = this;
+            if (vm.selected && vm.marker) {
+                const geom = vm.selected.features[0].geometry;
+                if (geom) {
+                    vm.length = geom.coordinates[vm.marker][3]; // M
+                    vm.height = geom.coordinates[vm.marker][2]; // Z
+                    return;
                 }
             }
+            vm.height = null;
+            vm.length = null;
         },
     },
     'methods' : {
         update_chart () {
             const vm = this;
-            const geom = vm.selected && vm.selected.features[0].geometry;
-            if (geom) {
-                vm.chart_data = geom.coordinates;
-                vm.length = geom.coordinates[geom.coordinates.length - 1][3];
-            } else {
-                vm.chart_data = {};
-                vm.length = 0;
+            if (vm.selected) {
+                const geom = vm.selected.features[0].geometry;
+                if (geom) {
+                    tools.add_m_dimension (geom.coordinates);
+                    vm.ad = tools.accumulate_ascent_descent (geom.coordinates);
+                    vm.ad.length = geom.coordinates[geom.coordinates.length - 1][3];
+                    vm.chart_data = geom.coordinates;
+                    return;
+                }
+            }
+            vm.ad = {};
+            vm.chart_data = [];
+        },
+        reverse () {
+            const vm = this;
+            if (vm.selected) {
+                const geom = vm.selected.features[0].geometry;
+                if (geom) {
+                    geom.coordinates.reverse ();
+                    vm.update_chart ();
+                }
             }
         },
         format_km (length) {
@@ -122,9 +191,9 @@ export default {
             }
             return '';
         },
-        format_height (height) {
+        format_ele (height) {
             if (Number.isFinite (height)) {
-                return height.toFixed (0);
+                return height.toFixed (0) + ' m';
             }
             return '';
         },
@@ -138,9 +207,12 @@ export default {
 
 .vm-sidebar {
     .subtitle {
-        display: inline-block;
-        font-size: smaller;
-        margin-right: 0.5em;
+        font-weight: bold;
+    }
+    .reverse {
+        color: white;
+        background: var(--hikemap-background);
+        border-color: var(--hikemap-color);
     }
 }
 
