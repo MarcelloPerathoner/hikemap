@@ -6,9 +6,81 @@
  * @author Marcello Perathoner
  */
 
-import * as d3  from 'd3';
-import _        from 'lodash';
+import * as d3            from 'd3';
+import _                  from 'lodash';
+import nearestPointOnLine from '@turf/nearest-point-on-line';
 
+// alias: openstreetmap-carto/symbols
+const symbols = require.context ('osm_carto_symbols', true, /\.svg$/);
+
+function load_symbol (path) {
+    try {
+        const module = symbols (path);
+        if (module !== null)
+            return module.default;
+    } catch (e) {
+    }
+    return null;
+}
+
+export function get_poi_icon (feature) {
+    const tags = feature.properties.tags;
+    if (tags.type === 'route')
+        return null;
+
+    if (tags.place)
+        return load_symbol ('./place/place-4.svg');
+
+    if (tags.mountain_pass === 'yes')
+        return load_symbol (`./natural/saddle.svg`);
+    if (tags.natural)
+        return load_symbol (`./natural/${tags.natural}.svg`);
+
+    if (tags.historic)
+        return load_symbol (`./historic/${tags.historic}.svg`);
+
+    if (tags.tourism === 'alpine_hut')
+        return load_symbol (`./tourism/alpinehut.svg`);
+    if (tags.tourism === 'wilderness_hut')
+        return load_symbol (`./tourism/wilderness_hut.svg`);
+
+    if (tags.amenity === 'restaurant')
+        return load_symbol (`./amenity/restaurant.svg`);
+    if (tags.amenity === 'parking')
+        return load_symbol (`./amenity/parking.svg`);
+
+    if (tags.public_transport)
+        return load_symbol ('./highway/bus_stop.12.svg');
+
+    return null;
+}
+
+export function is_feature_poi (feature) {
+    const tags = feature.properties.tags;
+
+    if (tags.type === 'route')
+        return false;
+
+    if (tags.place || tags.natural || tags.historic || tags.public_transport)
+        return true;
+
+    if (tags.mountain_pass === 'yes' ||
+        tags.tourism === 'alpine_hut' ||
+        tags.tourism === 'wilderness_hut' ||
+        tags.amenity === 'restaurant' ||
+        tags.amenity === 'parking')
+        return true;
+
+    return false;
+}
+
+function eq (a, b) {
+    return (a[0] === b[0]) && (a[1] === b[1]);
+}
+
+export function empty_feature_collection () {
+    return { 'type' : 'FeatureCollection', 'features' : [] };
+};
 
 export function ensure_ref (d) {
     if (!d.tags) {
@@ -33,6 +105,49 @@ export function ensure_ref (d) {
         d.tags.ref = '?';
     }
     return d;
+}
+
+export function localize (tags, key) {
+    for (const language of navigator.languages) {
+        const lang = language.split ('-')[0];
+        const value = tags[`${key}:${lang}`];
+        if (value) return value;
+    }
+    return tags[key];
+}
+
+/**
+ * Format a string in python fashion.  "{count} items found"
+ *
+ * @function format
+ *
+ * @param {String} s  - The string to format
+ * @param {dict} data - A dictionary of key: value
+ *
+ * @returns {String} The formatted string
+ */
+
+export function format (s, data) {
+    return s.replace (/\{([_\w][_\w\d]*)\}/gm, (match, p1) => data[p1]);
+}
+
+export function format_km (length) {
+    if (Number.isFinite (length)) {
+        return length.toFixed (1) + ' km';
+    }
+    return '';
+}
+
+export function format_ele (height) {
+    if (Number.isFinite (height)) {
+        return height.toFixed (0) + ' m';
+    }
+    return '';
+}
+
+export function is_feature_route (feature) {
+    const tags = feature.properties.tags;
+    return tags.type === 'route';
 }
 
 export function curveContext (curve) {
@@ -89,6 +204,35 @@ export function accumulate_ascent_descent (coordinates) {
     return { 'ascent' : asc, 'descent' : desc };
 }
 
+export function add_poi_index (route, pois) {
+    const feature0 = route.features[0];
+    for (const feature of pois.features) {
+        const p = feature.properties;
+        p.index  = null;
+        p.icon   = null;
+        p.height = null;
+        if (is_feature_poi (feature)) {
+            p.icon = get_poi_icon (feature);
+            const geom = feature.geometry;
+            let pt = null;
+            if (geom.type === 'Point') {
+                pt = geom.coordinates;
+            }
+            if (geom.type === 'LineString') {
+                pt = geom.coordinates[0]; // just pick the first point
+            }
+            if (pt) {
+                p.height = pt[2];
+                const snapped = nearestPointOnLine (feature0, pt);
+                if (snapped.properties.dist < 0.1) { // in km
+                    p.index = snapped.properties.index;
+                    p.length = feature0.geometry.coordinates[0][p.index][3]; // M
+                }
+            }
+        }
+    }
+}
+
 export function getIndexAtLength (coordinates, length) {
     // Find index of the point at distance length from the start of the
     // linestring.  Needs coordinates with an M dimension.
@@ -101,16 +245,15 @@ export function getPointAtLength (coordinates, length) {
     return coordinates[getIndexAtLnegth (length)];
 }
 
-export function getIndexAtPoint (coordinates, latlng) {
+export function getIndexAtPoint (geom, latlng) {
     // inverse of getPointAtLength
-    // needs an M dimension
 
     const p0 = [ latlng.lng, latlng.lat ]; // mouse pointer is here
     let min_distance = Infinity;           // the smallest so far
     let index = null;
 
-    for (const [i, pt] of coordinates.entries ()) {
-        const distance = d3.geoDistance (p0, pt);
+    for (const [i, pt] of geom.coordinates[0].entries ()) {
+        const distance = Math.sqrt (((pt[0] - p0[0]) ** 2) + ((pt[1] - p0[1]) ** 2));
         if (distance < min_distance) {
             min_distance = distance;
             index = i;
@@ -119,16 +262,44 @@ export function getIndexAtPoint (coordinates, latlng) {
     return index;
 }
 
-export function sort_lines (geometry) {
-    // reverses the linestrings in the input multilinestring that are inverted
-    // so that every linestring starts where the previous one ended.
+export function getIndexAtPointTurf (geom, latlng) {
+    // Find the index of the point nearest to latlng
 
-    if (geometry.type === 'LineString') {
-        return;
+    const pt = [ latlng.lng, latlng.lat ]; // mouse pointer is here
+    const snapped = nearestPointOnLine (geom, pt);
+
+    if (snapped.properties.dist < 0.1) { // in km
+        return snapped.properties.index;
+    }
+    return null;
+}
+
+export function clip (geometry, bbox) {
+    // clips geometry keeping only linestrings that intersect bbox
+
+    function touches (linestring) {
+        for (const pt in linestring.coordinates) {
+            if (pt[0] >= bbox.left && pt[0] <= bbox.right &&
+                pt[1] >= bbox.top  && pt[1] <= bbox.bottom) {
+                return true
+            }
+        }
+        return false;
     }
 
+    if (geometry.type === 'MultiLineString') {
+        return geometry.coordinates.filter (d => touches (d));
+    }
+
+    throw `Error: cannot clip geometry of type ${geometry.type}`;
+}
+
+export function sort_lines (geometry) {
+    // make all linestrings in the input multilinestring
+    // go in the same direction
+
     if (geometry.type !== 'MultiLineString') {
-        throw `Error: cannot not reverse geometry of type ${geometry.type}`;
+        return;
     }
 
     // just one line, no processing required
@@ -136,14 +307,10 @@ export function sort_lines (geometry) {
         return;
     }
 
-    function eq (a, b) {
-        return (a[0] === b[0]) && (a[1] === b[1]);
-    }
-
     let le = null;  // last way's end
     let first_way = geometry.coordinates[0]; // temp store of first way
 
-    for (const way of geometry.coordinates) {
+    for (const way of geometry.coordinates.slice (1)) {
         let s = way[0];
         let e = way[way.length - 1];
 
@@ -174,66 +341,48 @@ export function sort_lines (geometry) {
 
 export function stitch (geometry) {
     // stitches the linestrings in the input multilinestring
-    // into one linestring
+    // into as few linestring as possible
+    // Always returns a MultiLineString.
     // This is a better stitcher than ST_MakeLine because it groks
     // reversed ways.
     // This is a better stitcher than ST_LineMerge because it handles
-    // duplicated ways (forward and backward ways of a route).
-
-    if (geometry.type === 'LineString') {
-        return geometry;
-    }
+    // duplicated ways (ways taken forward and backward).
 
     if (geometry.type !== 'MultiLineString') {
-        throw `Error: cannot not stitch geometry of type ${geometry.type}`;
+        return;
     }
 
     // just one line, no stitching required
-    if (geometry.coordinates.length === 1) {
-        return {
-            'type' : 'LineString',
-            'coordinates' : geometry.coordinates[0],
-        }
+    if (geometry.coordinates.length < 2) {
+        return geometry;
     }
 
-    function eq (a, b) {
-        return (a[0] === b[0]) && (a[1] === b[1]);
-    }
+    sort_lines (geometry);
 
-    // determine the orientation of the first linestring
-    let linestring;
+    const linestrings = [];
+    let endpoint = [null, null];
+    let linestring = null;
 
-    let w1 = geometry.coordinates[0];
-    let w2 = geometry.coordinates[1];
-
-    let n11 = w1[0];
-    let n12 = w1[w1.length - 1];
-    let n21 = w2[0];
-    let n22 = w2[w2.length - 1];
-
-    if (eq (n11, n21) || eq (n11, n22)) {
-        w1.reverse ();
-    }
-    linestring = w1;
-
-    for (w2 of geometry.coordinates.slice (1)) {
-        const n1 = linestring[linestring.length - 1];
-        n21 = w2[0];
-        n22 = w2[w2.length - 1];
-
-        if (eq (n1, n21) || eq (n1, n22)) {
-            if (eq (n1, n22)) {
-                w2.reverse ();
-            }
-            linestring = linestring.concat (w2.slice (1));
+    for (const way of geometry.coordinates) {
+        if (eq (way[0], endpoint)) {
+            // stitch linestrings
+            linestring = linestring.concat (way.slice (1));
         } else {
-            throw 'Error: could not stitch MultiLineString';
+            // start another linestring
+            if (linestring !== null) {
+                linestrings.push (linestring.slice ()); // make a copy
+            }
+            endpoint = [null, null];
+            linestring = way;
         }
+        endpoint = way[way.length - 1];
     }
+
+    linestrings.push (linestring.slice ());
 
     return {
-        'type'        : 'LineString',
-        'coordinates' : linestring,
+        'type'        : 'MultiLineString',
+        'coordinates' : linestrings,
     }
 }
 
@@ -361,6 +510,20 @@ function draw_osmc_symbol (ground, size) {
     return g.node ();
 }
 
+export function osmc_waycolor (osmc_symbol) {
+    // Convert osmc:symbol into a way color
+    //
+    // @param osmc_symbol The osmc:symbol string.
+    //
+    // @return The way color
+    //
+    // osmc:symbol = waycolor:background[:foreground][[:foreground2]:text:textcolor]
+
+    const components = osmc_symbol.split (':');
+    return components.length > 1 ? components[0] : 'red';
+}
+
+
 export function osmc_symbol (osmc_symbol, elem = 'svg:symbol') {
     // Convert osmc:symbol into an SVG symbol
     //
@@ -371,7 +534,7 @@ export function osmc_symbol (osmc_symbol, elem = 'svg:symbol') {
     // osmc:symbol = waycolor:background[:foreground][[:foreground2]:text:textcolor]
 
     let waycolor    = null,
-        background  = '#fff',
+        background  = null,
         foreground  = null,
         foreground2 = null,
         text        = null,

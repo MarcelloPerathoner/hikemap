@@ -1,6 +1,7 @@
 <template>
 <b-sidebar right no-header shadow lazy
            id="sidebar-right" class="vm-sidebar"
+           width="400px"
            :no-close-on-route-change="true" v-model="is_open"
            @hidden="$emit ('hidden')">
   <template v-slot:default="{ hide }">
@@ -12,44 +13,72 @@
         <div class="d-flex flex-column justify-content-center">
           <span class="role">{{ props.member_role }}</span>
         </div>
-        <my-shield :osmc_symbol="osmc_symbol" />
+        <my-shield :osmc_symbol="props.tags ['osmc:symbol']" />
       </div>
 
       <p class="subtitle">{{ props.tags.name }}</p>
+      <p>
+        Total Length: {{ format_km (ad.length) }}<br>
+        Ascent: {{ format_ele (ad.ascent) }}<br>
+        Descent: {{ format_ele (-ad.descent) }}
+      </p>
 
-      <div class="py-2">
-        <my-chart id="0" :data='chart_data' :height='250' :marker="marker" />
-
-        <div class="d-flex justify-content-between py-2">
-          <p class="my-0">
-            Length: {{ format_km (length) }}<br>
-            Height: {{ format_ele (height) }}
-          </p>
-          <b-button class="reverse" variant="none" size="sm" @click="reverse">
-            <b-icon-caret-left />
-            <b-icon-caret-right />
+      <div class="my-2">
+        <div class="d-flex mt-2">
+          <b-button block flex-grow-1 v-b-toggle.ele>Elevation Profile</b-button>
+          <b-button class="ml-2 w-25" @click="backward ^= true">
+            <b-icon-caret-left /><b-icon-caret-right />
           </b-button>
         </div>
+        <b-collapse id="ele" class="mt-2" role="tabpanel" visible>
+          <b-card no-body>
+            <div class="p-2">
+              <my-chart :selected_id='selected_id' :backward="backward" :marker="marker" />
+            </div>
+          </b-card>
+        </b-collapse>
 
-        <p>
-          Total Length: {{ format_km (ad.length) }}<br>
-          Ascent: {{ format_ele (ad.ascent) }}<br>
-          Descent: {{ format_ele (-ad.descent) }}
-        </p>
+        <b-button class="mt-2" block v-b-toggle.pois>POI</b-button>
+        <b-collapse id="pois" class="mt-2" role="tabpanel" visible>
+          <b-card no-body>
+            <b-table-simple small striped hover>
+              <b-tbody>
+                <b-tr v-for="f in pois" :key="f.properties.id" class="poi"
+                      @click="on_click_poi ($event, f)">
+                  <b-td>
+                    <img class="icon" :src="f.properties.icon" />
+                  </b-td>
+                  <b-td>
+                    {{ localize (f.properties.tags, 'name')  }}
+                  </b-td>
+                  <b-td>
+                    {{ format_ele (+f.properties.height) }}
+                  </b-td>
+                </b-tr>
+                <b-tr v-if="pois.length === 0" :key="0" class="poi">
+                  <b-td>There are no POIs in this route.</b-td>
+                </b-tr>
+              </b-tbody>
+            </b-table-simple>
+          </b-card>
+        </b-collapse>
 
-        <h3 class="mt-3">Route Data</h3>
+        <b-button class="mt-2" block v-b-toggle.osm-data>OSM Data</b-button>
+        <b-collapse id="osm-data" class="mt-2" role="tabpanel">
+          <b-card no-body>
+            <b-table small :items="table_items" :fields="['tag', 'value']">
+              <template v-slot:cell(value)="{ item }">
+                <template v-if="item.url">
+                  <a :href="item.url">{{ item.value }}</a>
+                </template>
+                <template v-else>
+                  {{ item.value }}
+                </template>
+              </template>
+            </b-table>
+          </b-card>
+        </b-collapse>
 
-        <b-table small :items="table_items" :fields="['tag', 'value']">
-          <template v-slot:cell(value)="{ item }">
-            <template v-if="item.url">
-              <a :href="item.url">{{ item.value }}</a>
-            </template>
-            <template v-else>
-              {{ item.value }}
-            </template>
-          </template>
-
-        </b-table>
       </div>
     </div>
   </template>
@@ -67,6 +96,7 @@
 import { mapGetters } from 'vuex'
 
 import * as d3 from 'd3';
+import L       from 'leaflet';
 
 import chart      from './chart.vue';
 import shield     from './shield.vue';
@@ -78,35 +108,29 @@ export default {
         'my-shield' : shield,
     },
     'props' : {
-        'selected' : {
-            'type' : Object,
-        },
-        'marker' : {
-            'type' : Number,
-        },
+        'marker'   : L.LatLng,
     },
     'data'  : function () {
         return {
-            'chart_data' : [],
-            'length'     : 0,     // the current length at crosshair cursor
-            'height'     : 0,     // the current height at crosshair cursor
-            'is_open'    : false, // v-model
-            'ad'         : {},
+            'is_open'  : false, // v-model
+            'backward' : 0, // forward or backward
+            'ad'       : {},
+            'pois'     : [],
         };
     },
     'computed' : {
+        ... mapGetters ([
+            'routes',
+            'selected',
+            'selected_id',
+        ]),
         'props' : function () {
-            return (this.selected && this.selected.features[0].properties) || {};
-        },
-        'osmc_symbol' : function () {
-            const props = this.selected && this.selected.features[0].properties;
-            if (props) {
-                return props.tags ['osmc:symbol'];
-            }
-            return '';
+            const vm = this;
+            return (vm.selected && vm.selected.route.features[0].properties) || {};
         },
         'table_items' : function () {
-            const feature = this.selected && this.selected.features[0];
+            const vm = this;
+            const feature = vm.selected && vm.selected.route.features[0];
             if (feature) {
                 const o = Object.entries (feature.properties.tags).map (d => {
                     if (d[0] === 'url' || d[0] === 'website') {
@@ -140,63 +164,65 @@ export default {
         },
     },
     'watch' : {
-        'selected' : function () {
+        'selected_id' : function () {
             const vm = this;
-            vm.update_chart ();
-            vm.is_open = !!vm.selected;
+            vm.update ();
+            vm.is_open = !!vm.selected_id;
         },
-        'marker' : function () {
+        'backward' : function () {
             const vm = this;
-            if (vm.selected && vm.marker) {
-                const geom = vm.selected.features[0].geometry;
-                if (geom) {
-                    vm.length = geom.coordinates[vm.marker][3]; // M
-                    vm.height = geom.coordinates[vm.marker][2]; // Z
-                    return;
-                }
-            }
-            vm.height = null;
-            vm.length = null;
+            vm.reverse ();
+            vm.update ();
         },
     },
     'methods' : {
-        update_chart () {
+        update () {
             const vm = this;
-            if (vm.selected) {
-                const geom = vm.selected.features[0].geometry;
-                if (geom) {
-                    tools.add_m_dimension (geom.coordinates);
-                    vm.ad = tools.accumulate_ascent_descent (geom.coordinates);
-                    vm.ad.length = geom.coordinates[geom.coordinates.length - 1][3];
-                    vm.chart_data = geom.coordinates;
-                    return;
-                }
-            }
             vm.ad = {};
-            vm.chart_data = [];
+
+            const geom = vm.selected && vm.selected.route.features[0].geometry;
+            if (geom) {
+                const coords = geom.coordinates[0];
+                tools.add_m_dimension (coords);
+                tools.add_poi_index (vm.selected.route, vm.selected.pois);
+                vm.ad = tools.accumulate_ascent_descent (coords);
+                vm.ad.length = coords[coords.length - 1][3];
+            }
+            const pois = vm.selected && vm.selected.pois.features;
+            if (pois) {
+                vm.pois = pois
+                    .filter (f => f.properties.index !== null)
+                    .sort ((a, b) => a.properties.index - b.properties.index);
+            }
+            const chart = vm.$refs.chart;
         },
         reverse () {
             const vm = this;
-            if (vm.selected) {
-                const geom = vm.selected.features[0].geometry;
-                if (geom) {
-                    geom.coordinates.reverse ();
-                    vm.update_chart ();
-                }
+            const geom = vm.selected && vm.selected.route.features[0].geometry;
+            if (geom) {
+                const coords = geom.coordinates[0];
+                coords.reverse ();
+                vm.selected.pois.features.reverse ();
             }
         },
-        format_km (length) {
-            if (Number.isFinite (length)) {
-                return length.toFixed (1) + ' km';
+        on_click_poi (event, feature) {
+            const geom = feature.geometry;
+            let latlng = null;
+            if (geom.type === 'Point') {
+                latlng = L.latLng (geom.coordinates[1], geom.coordinates[0]);
             }
-            return '';
-        },
-        format_ele (height) {
-            if (Number.isFinite (height)) {
-                return height.toFixed (0) + ' m';
+            if (geom.type === 'LineString') {
+                const pt = d3.geoCentroid (geom);
+                latlng = L.latLng (pt[1], pt[0]);
             }
-            return '';
+            event.hikechart = {
+                'index'  : feature.properties.index,
+                'latlng' : latlng,
+            };
         },
+        localize   : tools.localize,
+        format_km  : tools.format_km,
+        format_ele : tools.format_ele,
     },
 };
 </script>
@@ -213,6 +239,16 @@ export default {
         color: white;
         background: var(--hikemap-background);
         border-color: var(--hikemap-color);
+    }
+    tr.poi {
+        cursor: pointer;
+    }
+    img.icon {
+        height: 1em;
+        vertical-align: baseline;
+    }
+    div.card table {
+        margin-bottom: 0;
     }
 }
 

@@ -1,8 +1,8 @@
 const glob = require ('glob');
 const path = require ('path');
 
-const HtmlWebpackPlugin = require ('html-webpack-plugin');
-const VueLoaderPlugin   = require ('vue-loader/lib/plugin'); // loads vue single-file components
+const HtmlWebpackPlugin   = require ('html-webpack-plugin');
+const { VueLoaderPlugin } = require('vue-loader');
 
 module.exports = {
     context : path.resolve (__dirname),
@@ -30,7 +30,7 @@ module.exports = {
                 ],
             },
             {
-                test : /\.(png|jpg|jpeg|gif)$/,
+                test : /\.(png|jpg|jpeg|svg)$/,
                 use  : [
                     {
                         loader  : 'file-loader',
@@ -70,11 +70,15 @@ module.exports = {
             inject   : false,
             chunks   : [ 'client', 'vendor', 'runtime' ],
         }),
-        new VueLoaderPlugin (),
+        new VueLoaderPlugin ({
+        }),
     ],
     resolve : {
         modules : [
             path.join (__dirname, '../node_modules'),
         ],
+        alias : {
+            osm_carto_symbols : path.join (__dirname, '../../openstreetmap-carto/symbols/'),
+        },
     },
 };

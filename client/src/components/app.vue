@@ -10,9 +10,7 @@
  * @author Marcello Perathoner
  */
 
-import Vue          from 'vue';
-import VueRouter    from 'vue-router';
-import Vuex         from 'vuex';
+import VueRouter     from 'vue-router';
 import { BootstrapVue, BootstrapVueIcons } from 'bootstrap-vue';
 
 import _            from 'lodash';
@@ -20,11 +18,6 @@ import * as d3      from 'd3';
 import url          from 'url';
 
 import maps         from './maps.vue';
-
-Vue.use (VueRouter);
-Vue.use (Vuex);
-Vue.use (BootstrapVue);
-Vue.use (BootstrapVueIcons);
 
 const routes = [
     {
@@ -39,35 +32,8 @@ const router = new VueRouter ({
     'routes' : routes,
 });
 
-const store = new Vuex.Store ({
-    'state' : {
-        'layers_shown' : [],                 // geo layers shown
-        'geo_layers'   : { 'layers' : [] },  // geo layers available
-        'tile_layers'  : { 'layers' : [] },  // tile layers
-        'wms_layers'   : { 'layers' : [] },  // wms layers
-    },
-    'mutations' : {
-        toolbar_range (state, data) {
-            _.merge (state, {
-            });
-        },
-        toolbar_layers_shown (state, data) {
-            this.state.layers_shown = data.layers_shown;
-        },
-    },
-    'getters' : {
-        'xhr_params' : state => ({
-        }),
-        'layers_shown' : state => state.layers_shown,
-        'geo_layers'   : state => state.geo_layers,
-        'tile_layers'  : state => state.tile_layers,
-        'wms_layers'   : state => state.wms_layers,
-    },
-});
-
 export default {
     'router' : router,
-    'store'  : store,
     'el': app,
     data () {
         return {

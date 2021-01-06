@@ -1,4 +1,4 @@
-/* See: https://getbootstrap.com/docs/4.1/getting-started/theming/ */
+/* See: https://getbootstrap.com/docs/4.5/getting-started/theming/ */
 
 @import "bootstrap/scss/_functions.scss";
 @import "bootstrap/scss/_variables.scss";
@@ -39,7 +39,3 @@ $container-max-widths: (
 );
 
 $fa-font-path: "/client/webfonts" !default;
-
-$country-color: $red;
-$region-color:  $yellow;
-$place-color:   $green;

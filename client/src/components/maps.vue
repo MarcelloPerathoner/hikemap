@@ -2,7 +2,6 @@
   <div class="maps-vm">
     <div id="content">
       <slippy-map ref="map"
-                  :selected="selected"
                   :marker="marker"
                   @click.native="on_click"
                   @mousemove.native="on_mousemove"
@@ -11,9 +10,9 @@
     </div>
 
     <my-sidebar v-bind:style="sidebar_style"
-                :selected="selected"
                 :marker="marker"
                 @hidden="on_sidebar_hidden"
+                @click.native="on_click"
                 @mousemove.native="on_mousemove"
                 @mouseout.native="on_mouseout"
                 />
@@ -54,19 +53,25 @@ const EDITORS = [
     {
         'id'    : 'iD',
         'text'  : 'Edit with iD',
-        'href'  : 'https://www.openstreetmap.org/edit?editor=id',
+        'href'  : 'https://www.openstreetmap.org/edit?editor=id{hash}',
         'local' : false,
     },
     {
         'id'    : 'Potlach2',
         'text'  : 'Edit with Potlatch 2',
-        'href'  : 'https://www.openstreetmap.org/edit?editor=potlatch2',
+        'href'  : 'https://www.openstreetmap.org/edit?editor=potlatch2{hash}',
         'local' : false,
     },
     {
         'id'    : 'JOSM',
         'text'  : 'Edit with JOSM',
-        'href'  : 'http://localhost:8111/load_and_zoom',
+        'href'  : 'http://localhost:8111/load_and_zoom?left={w}&right={e}&top={n}&bottom={s}',
+        'local' : true,
+    },
+    {
+        'id'    : 'JOSMrel',
+        'text'  : 'Edit relation with JOSM',
+        'href'  : 'http://localhost:8111/load_and_zoom?left={w}&right={e}&top={n}&bottom={s}&select=relation{osm_id}',
         'local' : true,
     },
 ];
@@ -85,7 +90,6 @@ export default {
             'info_panels'   : [],
             'next_id'       : 1,
             'editors'       : EDITORS,
-            'selected'      : null,
             'marker'        : null,
         };
     },
@@ -93,6 +97,7 @@ export default {
         ... mapGetters ([
             'geo_layers',
             'tile_layers',
+            'selected',
         ])
     },
     'watch' : {
@@ -103,8 +108,12 @@ export default {
     'methods' : {
         on_click (event) {
             if (event.hikemap) {
+                // click on shield
                 // event bubbled up with extra info attached
-                const feature = event.hikemap.features[0];
+                const vm = this;
+                vm.$store.commit ('select_route', event.hikemap.id);
+
+                const feature = vm.selected.route.features[0];
                 try {
                     feature.geometry = tools.stitch (feature.geometry);
                 } catch (e) {
@@ -112,20 +121,25 @@ export default {
                         console.warn (`${e} in route ${feature.properties.tags.ref} (${feature.id})`);
                     }
                 }
-                this.sidebar_style = {
-                    '--hikemap-color'      : event.hikemap.layer_options.color,
-                    '--hikemap-background' : event.hikemap.layer_options.background,
+                vm.sidebar_style = {
+                    '--hikemap-color'      : event.hikemap.layer.my_options.color,
+                    '--hikemap-background' : event.hikemap.layer.my_options.background,
                 };
-                this.selected = event.hikemap; // opens the sidebar
+            }
+            if (event.hikechart) {
+                // click on elevation chart
+                // event bubbled up with extra info attached
+                const vm = this;
+                vm.marker = event.hikechart.latlng;
+                vm.$nextTick (() => vm.$refs.map.pan_to_marker ());
             }
         },
         on_mousemove (event) {
             if (event.hikemarker) {
-                const geom = this.selected.features[0].geometry;
-                this.marker = tools.getIndexAtPoint (geom.coordinates, event.hikemarker.latlng);
+                this.marker = event.hikemarker.latlng;
             }
             if (event.hikechart) {
-                this.marker = event.hikechart.index;
+                this.marker = event.hikechart.latlng;
             }
         },
         on_mouseout (event) {
@@ -137,31 +151,29 @@ export default {
             }
         },
         on_sidebar_hidden (event) {
-            if (this.selected) {
-                this.selected.unselect ();
-                this.selected = null;
-            }
+            this.$store.commit ('select_route', null);
         },
         edit_map_with (editor_id) {
+            const b = this.$refs.map.map.getBounds ();
+            const params = {
+                'n' : b.getNorth (),
+                's' : b.getSouth (),
+                'w' : b.getWest (),
+                'e' : b.getEast (),
+                'hash'   : this.$route.hash,
+                'osm_id' : this.selected && this.selected.route.features[0].id.split ('/')[0],
+            };
+
             for (const item of EDITORS) {
                 if (item.id === editor_id) {
+                    const href = tools.format (item.href, params);
                     if (item.local) {
-                        const b = this.$refs.map.map.getBounds ();
-                        const params = {
-                            'left'   : b.getWest (),
-                            'right'  : b.getEast (),
-                            'top'    : b.getNorth (),
-                            'bottom' : b.getSouth (),
-                        };
-                        if (this.selected) {
-                            params.select = `relation${this.selected.features[0].id}`;
-                        }
-                        axios.get (item.href, { 'params' : params })
+                        axios.get (href)
                             .catch (function (error) {
                                 alert ('Could not open JOSM: ' + error);
                             });
                     } else {
-                        window.location = item.href + this.$route.hash;
+                        window.location = href;
                     }
                     break;
                 }
