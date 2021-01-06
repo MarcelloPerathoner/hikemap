@@ -3,10 +3,10 @@ metatile: 2
 name: OpenHikeMap Carto
 description: A mapnik style for hiking maps, in CartoCSS
 bounds: &world
-  - 11.5
-  - 46.4
-  - 12
-  - 46.8
+  - 10.36
+  - 46.18
+  - 12.54
+  - 47.14
 center:
   - 11.75
   - 46.6

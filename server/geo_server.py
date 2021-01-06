@@ -54,7 +54,7 @@ def init_query_params (conn, **kw):
 @geo_app.route ('/altimetry/<int:route_id>/')
 @geo_app.route ('/altimetry/<int:route_id>/<alternate>')
 def altimetry (route_id, alternate = ''):
-    """ Return route altimetry.
+    """ Return route altimetry and POIs.
 
     This always returns altimetry for the whole route.
     """
@@ -66,8 +66,27 @@ def altimetry (route_id, alternate = ''):
                member_role,
                rel_tags AS tags
         FROM ways_in_routes w
-        WHERE rel_id = :relation_id AND member_role = :alt
+        WHERE rel_id = :relation_id AND member_role = :alt AND exist (way_tags, 'highway')
         GROUP BY rel_id, rel_tags, member_role
+
+        UNION ALL
+
+        SELECT ST_AsGeoJSON (linestringz, 6)::json AS geom,
+               way_id || '/' || member_role AS geo_id,
+               member_role,
+               way_tags AS tags
+        FROM ways_in_routes w
+        WHERE rel_id = :relation_id AND member_role = :alt AND NOT exist (way_tags, 'highway')
+
+        UNION ALL
+
+        SELECT ST_AsGeoJSON (geomz, 6)::json AS geom,
+               node_id || '/' || member_role AS geo_id,
+               member_role,
+               node_tags AS tags
+        FROM pois_in_routes w
+        WHERE rel_id = :relation_id AND member_role = :alt
+
         """, init_query_params (conn, relation_id = route_id, alt = alternate))
 
         return common.make_geojson_response (
@@ -80,6 +99,11 @@ def routes_geojson (route_type):
     """ Return all routes that intersect the bounding box.
     """
 
+    if route_type == 'hiking':
+        route_type = (route_type, 'foot')
+    else:
+        route_type = (route_type, )
+
     with current_app.config.dba.engine.begin () as conn:
         res = execute (conn, """
         SELECT NULL as geom,
@@ -88,7 +112,7 @@ def routes_geojson (route_type):
                rel_tags AS tags
         FROM ways_in_routes w
         WHERE linestring && {bbox}
-          AND rel_tags->'route' = :route_type
+          AND rel_tags->'route' IN :route_type
         GROUP BY rel_id, rel_tags, member_role
         """, init_query_params (conn, route_type = route_type))
 

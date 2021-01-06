@@ -12,6 +12,7 @@ DROP VIEW IF EXISTS planet_osm_line_view CASCADE;
 DROP VIEW IF EXISTS relations_of;
 DROP VIEW IF EXISTS snapshot.way_super_routes_view;
 DROP VIEW IF EXISTS ways_in_routes;
+DROP VIEW IF EXISTS pois_in_routes;
 DROP VIEW IF EXISTS route_lines;
 DROP VIEW IF EXISTS check_routes;
 
@@ -70,6 +71,8 @@ CREATE AGGREGATE ref_agg (TEXT) (
 ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_refs TEXT;
 ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_names TEXT;
 ALTER TABLE planet_osm_line ADD COLUMN IF NOT EXISTS route_ids INT[];
+
+ALTER TABLE snapshot.nodes ADD COLUMN  IF NOT EXISTS geomz GEOMETRY(POINTZ,4326);
 
 CREATE VIEW local_names AS
 SELECT osm_id,
@@ -136,7 +139,7 @@ SELECT way_id,
        ref_agg (rel_tags->'name') AS names,
        array_agg (rel_id ORDER BY rel_id) AS rel_ids
 FROM all_routes ar
-WHERE rel_tags->'route' = 'hiking'
+WHERE rel_tags->'route' IN  ('foot', 'hiking') -- , 'bicycle', 'mtb', 'piste', 'bus')
 GROUP BY way_id;
 
 CREATE VIEW snapshot.way_super_routes_view AS
@@ -219,17 +222,35 @@ SELECT ST_MakeLine (geom) FROM points3d;
 $$ LANGUAGE SQL IMMUTABLE;
 
 -- add ways with precomputed altitudes to all known routes
-ALTER TABLE snapshot.ways ADD COLUMN linestringz geometry (LineStringZ, 4326);
+ALTER TABLE snapshot.ways ADD COLUMN IF NOT EXISTS linestringz geometry (LineStringZ, 4326);
 
+-- the ways and the POIs that are areas
 CREATE OR REPLACE VIEW ways_in_routes AS
   SELECT r.id AS rel_id, rm.sequence_id, rm.member_role,
-         w.id AS way_id, w.linestring, w.linestringz, r.tags AS rel_tags
+         w.id AS way_id, w.linestring, w.linestringz,
+         r.tags AS rel_tags,
+         w.tags AS way_tags
   FROM snapshot.ways w
     JOIN snapshot.relation_members rm ON rm.member_id   = w.id
     JOIN snapshot.relations r         ON rm.relation_id = r.id
   WHERE rm.member_type = 'W' AND
         r.tags->'type' = 'route' AND
-        r.tags->'route' IN  ('hiking', 'bicycle', 'mtb', 'piste', 'bus')
+        r.tags->'route' IN  ('foot', 'hiking', 'bicycle', 'mtb', 'piste', 'bus')
+  ORDER BY r.id, rm.sequence_id;
+
+-- the POIs that are nodes
+CREATE OR REPLACE VIEW pois_in_routes AS
+  SELECT r.id AS rel_id, rm.sequence_id, rm.member_role,
+         n.id AS node_id,
+         n.geom AS geom,
+         n.geomz AS geomz,
+         n.tags AS node_tags
+  FROM snapshot.nodes n
+    JOIN snapshot.relation_members rm ON rm.member_id   = n.id
+    JOIN snapshot.relations r         ON rm.relation_id = r.id
+  WHERE rm.member_type = 'N' AND
+        r.tags->'type' = 'route' AND
+        r.tags->'route' IN  ('foot', 'hiking', 'bicycle', 'mtb', 'piste', 'bus')
   ORDER BY r.id, rm.sequence_id;
 
 ------
@@ -260,6 +281,29 @@ UPDATE snapshot.ways w
 
 ------
 
+WITH points2d AS (
+  SELECT DISTINCT node_id, geom, ST_Transform (geom, 3857) AS geom3857
+  FROM pois_in_routes
+),
+
+points3d AS (
+  SELECT node_id,
+  ST_MakePoint (
+      ST_X (p.geom),
+      ST_Y (p.geom),
+      COALESCE (round (ST_Value (dtm.rast, 1, p.geom3857)::numeric, 1), 0)
+  ) AS node_z
+  FROM points2d p
+    LEFT JOIN raster_dtm dtm ON ST_Intersects (dtm.rast, p.geom3857)
+)
+
+UPDATE snapshot.nodes n
+  SET geomz = ST_SetSRID (node_z, 4326)
+  FROM points3d p
+  WHERE n.id = p.node_id;
+
+------
+
 CREATE VIEW check_routes AS
 SELECT r.id                  AS rel,
        r.tags->'route'       AS route,
@@ -268,7 +312,7 @@ SELECT r.id                  AS rel,
        r.tags->'network'     AS network,
        r.tags->'osmc:symbol' AS symbol
 FROM snapshot.relations r
-WHERE r.tags->'route' IN ('hiking', 'bicycle', 'mtb', 'piste', 'bus');
+WHERE r.tags->'route' IN ('foot', 'hiking', 'bicycle', 'mtb', 'piste', 'bus');
 
 
 -- to check if route segments are ordered

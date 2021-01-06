@@ -2,14 +2,17 @@
 OSM_CARTO   = ../openstreetmap-carto
 SRTM        = ../srtm-stylesheets
 
-# where do we get planet files, DTMs, etc.?
-GEO_FABRIK  = https://download.geofabrik.de
-OSM_DUMP    = europe/italy/nord-est-latest.osm.pbf
-OSM_UPDATES = europe/italy/nord-est-updates/
-OSM_BASE    = $(notdir $(OSM_DUMP))
-DTM_TIFFS   := $(wildcard downloadService/downloadService/DTM-2p5m_*.tif)
-
 DATADIR     = $(CURDIR)/data
+
+# where do we get planet files, DTMs, etc.?
+GEO_FABRIK_DUMP = https://download.geofabrik.de/europe/italy/nord-est-latest.osm.pbf
+OSM_DUMP        = $(DATADIR)/nord-est-latest.osm.pbf
+# OSM_UPDATES = europe/italy/nord-est-updates/
+
+# download manually from geokatalog using GeoTiff in ETRS89.UTM32N
+# download in 6 chunks, then use
+# scripts/unzip_stupid_geokatalog_dtm_download_format.sh to unpack
+DTM_TIFFS   := $(wildcard downloadService/dtm/DTM-2p5m_*.tif)
 
 # the input database clipped to the region of interest
 OSM_CLIPPED = $(DATADIR)/clipped.osm
@@ -20,19 +23,25 @@ SRS_OSM       = EPSG:3857     # The SRS used by OpenStreetMap
 SRS_BZIT      = EPSG:25832    # ETRS89 / UTM zone 32N used by provinz.bz.it
 SRS_WGS       = EPSG:4326     # WGS84
 
+# DTM of South Tyrol
+DTM_XMIN=10.36
+DTM_XMAX=12.54
+DTM_YMIN=46.18
+DTM_YMAX=47.14
+
 # the region we are interested in WGS coords
-XMIN=11.45
-YMIN=46.40
-XMAX=12.15
-YMAX=46.80
+XMIN=10.36
+XMAX=12.54
+YMIN=46.18
+YMAX=47.14
 BBOX_WGS      = $(XMIN) $(YMIN) $(XMAX) $(YMAX)
 BBOX_OSM2PSQL = $(XMIN),$(YMIN),$(XMAX),$(YMAX)
 
 # the region we are interested in OSM coords (from gdalinfo)
-XMIN_OSM=1280174.144
-XMAX_OSM=1335833.890
-YMIN_OSM=5844682.851
-YMAX_OSM=5909489.864
+XMIN_OSM=1153269.925
+XMAX_OSM=1395944.925
+YMIN_OSM=5809240.650
+YMAX_OSM=5964955.650
 BBOX_OSM=$(XMIN_OSM) $(YMIN_OSM) $(XMAX_OSM) $(YMAX_OSM)
 
 PGHOST      = localhost
@@ -59,10 +68,9 @@ OGR2OGR   = ogr2ogr
 OSM2PGSQL = osm2pgsql
 GDALWARP  = /usr/bin/gdalwarp -multi -wo NUM_THREADS=ALL_CPUS -overwrite -of GTiff
 
-BZIT_GEOJSON = $(OGR2OGR) -spat $(BBOX_WGS) -spat_srs $(SRS_WGS) \
-			-s_srs $(SRS_BZIT) -t_srs $(SRS_WGS) \
-			-clipdst $(BBOX_WGS) -lco "SIGNIFICANT_FIGURES=10" \
-			-f "GeoJSON" -dim XY
+OGR2_BASE = $(OGR2OGR) -spat_srs $(SRS_WGS) \
+			-s_srs $(SRS_BZIT) -t_srs $(SRS_WGS) -f "GeoJSON" -simplify 1.0 \
+			-lco "SIGNIFICANT_FIGURES=10" -dim XY
 
 MSS := $(wilcard style/*.mss)
 
@@ -101,8 +109,8 @@ touch/hikemap.sql: hikemap.sql touch/osm2pgsql touch/osmosis
 	touch $@
 
 # clip the planet file to the region of interest
-$(OSM_CLIPPED): $(DATADIR)/$(OSM_BASE)
-	osmosis --read-pbf-fast $(DATADIR)/$(OSM_BASE) workers=8 --log-progress \
+$(OSM_CLIPPED): $(OSM_DUMP)
+	osmosis --read-pbf-fast $(OSM_DUMP) workers=8 --log-progress \
 		--bounding-box left=$(XMIN) right=$(XMAX) bottom=$(YMIN) top=$(YMAX) \
 		completeRelations=yes cascadingRelations=yes \
 		--write-xml $@
@@ -134,7 +142,7 @@ touch/osmosis: $(OSM_CLIPPED)
 	touch $@
 
 download:
-	wget -q -N -P $(DATADIR) $(GEO_FABRIK)/$(OSM_DUMP)
+	curl -z $(OSM_DUMP) -o $(OSM_DUMP) $(GEO_FABRIK_DUMP)
 	$(OSM_CARTO)/scripts/get-external-data.py
 
 build-patch:
@@ -145,7 +153,7 @@ project.mml: $(OSM_CARTO)/project.mml project.patch
 	cp $(OSM_CARTO)/project.mml .
 	patch < project.patch
 
-#style/roads.mss: $(OSM_CARTO)/style/roads.mss roads.patch
+# style/roads.mss: $(OSM_CARTO)/style/roads.mss roads.patch
 #	cp $(OSM_CARTO)/style/roads.mss style/
 #	patch < roads.patch
 
@@ -157,12 +165,13 @@ hikemap.xml: project.mml style/*.mss
 %.tiff: %.tif
 	gdal_translate -ot UInt16 $< /tmp/tmp.tif
 
-# the DTM warped to EPSG:3857
-# -tr 5 5 avoids artefacts
+# stitch the DTM geotiffs
+# and warp them to EPSG:3857
+#   -tr 5 5 avoids artefacts
 data/dtm-warped.tif: $(DTM_TIFFS)
 	$(GDALWARP) -r lanczos -rcs -order 3 -tr 5 5 \
 		-t_srs $(SRS_OSM) -te $(BBOX_WGS) -te_srs $(SRS_WGS) $^ /tmp/tmp.tif
-	gdal_calc.py -A /tmp/tmp.tif --outfile=$@ --calc="A*(A>100)*(A<3500)" --NoDataValue=0 --overwrite
+	gdal_calc.py -A /tmp/tmp.tif --outfile=$@ --calc="A*(A>100)*(A<4000)" --NoDataValue=0 --overwrite
 
 dem: hill-shade contour-lines import-dem
 
@@ -186,35 +195,47 @@ data/contour-lines-25.shp: data/dtm-warped.tif
 
 # import into Postgres for altimetry
 touch/import_dem: data/dtm-warped.tif
-	raster2pgsql -s $(SRS_OSM) -d -C -I -M -t 100x100 $^ public.raster_dtm | $(PSQL_OSM) -q
+	raster2pgsql -s $(SRS_OSM) -d -C -I -M -e -t auto $^ public.raster_dtm | $(PSQL_OSM) -q
 	touch $@
 
-data: data/hiking-trails.json \
-	data/mtb-tours.json       \
-	data/bicycle-lanes.json   \
-	data/ski-pistes.json      \
+data: data/hiking-trails.json      \
+	data/hiking-trails-west.json   \
+	data/hiking-trails-center.json \
+	data/hiking-trails-east.json   \
+	data/mtb-tours.json            \
+	data/bicycle-lanes.json        \
+	data/ski-pistes.json           \
 	data/landuse-plan.json
 
 # get HikingTrails manually from http://geokatalog.buergernetz.bz.it/geokatalog/
 # use this as data layer in JOSM
-data/hiking-trails.json: downloadService/dataset/HikingTrails_line.shp
-	$(BZIT_GEOJSON) -nlt LINESTRING $@ $<
+data/hiking-trails.geojson: downloadService/HikingTrails.geojson
+	$(OGR2_BASE) -spat $(BBOX_WGS) $@ $< -nlt LINESTRING
+
+data/hiking-trails-west.geojson: downloadService/HikingTrails.geojson
+	$(OGR2_BASE) -spat 10.3 $(YMIN) 11.2 $(YMAX) $@ $< -nlt LINESTRING
+
+data/hiking-trails-center.geojson: downloadService/HikingTrails.geojson
+	$(OGR2_BASE) -spat 11.2 $(YMIN) 11.7 $(YMAX) $@ $< -nlt LINESTRING
+
+data/hiking-trails-east.geojson: downloadService/HikingTrails.geojson
+	$(OGR2_BASE) -spat 11.7 $(YMIN) 12.6 $(YMAX) $@ $< -nlt LINESTRING
 
 # get SkiPistes manually from http://geokatalog.buergernetz.bz.it/geokatalog/
 # use this as data layer in JOSM
 data/ski-pistes.json: downloadService/dataset/SkiPistes_polygon.shp
-	$(BZIT_GEOJSON) -nlt POLYGON $@ $<
+	$(OGR2_BASE) -spat $(BBOX_WGS) -nlt POLYGON $@ $<
 
 # get LandUsePlan manually from http://geokatalog.buergernetz.bz.it/geokatalog/
 # use this as data layer in JOSM
 data/landuse-plan.json: downloadService/dataset/LandUsePlan_Lines_line.shp
-	$(BZIT_GEOJSON) -nlt LINESTRING $@ $<
+	$(OGR2_BASE) -spat $(BBOX_WGS) -nlt LINESTRING $@ $<
 
 data/mtb-tours.json: downloadService/dataset/MountainbikeTours_line.shp
-	$(BZIT_GEOJSON) -nlt LINESTRING $@ $<
+	$(OGR2_BASE) -spat $(BBOX_WGS) -nlt LINESTRING $@ $<
 
 data/bicycle-lanes.json: downloadService/dataset/BicycleLanes_line.shp
-	$(BZIT_GEOJSON) -nlt LINESTRING $@ $<
+	$(OGR2_BASE) -spat $(BBOX_WGS) -nlt LINESTRING $@ $<
 
 xml: hikemap.xml touch/hikemap.sql
 
