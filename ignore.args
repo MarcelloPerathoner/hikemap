@@ -1,0 +1,81 @@
+--osm-ignore
+   38304 # E66
+   66701 # Bus 102 Trento Cavalese
+  113579 # Bus 101 Trento Penia
+  186221 # 03 Südalpenweg
+  949981 # B100 Drautal Straße
+ 1116678 # ÖAV 471
+ 1116692 # Cortina 149
+ 1163255 # ÖAV 403 Karnischer Höhenweg
+ 1405697 # Strada Statale 52 Carnica
+ 1736379 # Traumpfad München-Venedig
+ 1753217 # Strada Statale 51 di Alemagna (Tratto ANAS)
+ 1754080 # Strada Provinciale 49 di Misurina
+ 2460773 # Ciclovia del Sole
+ 2759974 # EuroVelo 7 - Sun Route - part Italy 1
+ 2770634 # EuroVelo 7 - Sun Route - part Austria
+ 3107761 # ÖAV
+ 3107762 # ÖAV 403 Karnischer Höhenweg
+ 3107942 # ÖAV Heimatsteig
+ 3118896 # Sentiero Botanico sul dossone di Cembra (missing segment)
+ 3312655 # Via Claudia Augusta
+ 3968183 # 960X Korridorbus Innsbruck - Lienz
+ 3970708 # 960X Korridorbus Lienz - Innsbruck
+ 4222607 # mtb trudner horn (unofficial and a mess)
+ 4587693 # Bus: BELLUNO - AGORDO - ALLEGHE - ARABBA - CORVARA - COLFOSCO
+ 6032965 # Cammino del beato Enrico
+ 6504729 # Bicycle: "Munich-Venice
+ 6970784 # Bus 102 Cavalese Trento
+ 6980895 # Bus 101 Penia Trento
+ 7392618 # "Silvano De Romedi"
+ 7392620 # Cortina 108A
+ 7397080 # N01 Ferrata Masare etc.
+ 7478708 # "Sentiero C.A.I. 6A"
+ 8483592 # Cortina 159
+ 8490449 # Cortina 155
+ 9218098 # Via Romea
+ 9741603 # Hike Herz-Ass Villgratental
+10102927 # R1 Drauradweg
+10694060 # E45 (reason: oneways and no forward / backward)
+12104164 # ÖAV Bonner Höhenweg
+
+--osm-warn
+  140480 # Sentiero del Masarè
+ 1116663 # Cortina 101
+ 1686148 # Cortina 124
+ 1696865 # Hike Schillerhof - Totmoos
+ 2179746 # "Ruine Castelfeder - Rovine Castelfeder"
+ 2498418 # Geschichtsparcours
+ 2936078 # Hike Sagenweg
+ 5612679
+ 8670946
+ 9418834
+ 9418859
+ 9435892
+ 9437528
+ 9440628
+ 9441085
+ 9450633
+ 9450646
+ 9492303
+ 9876962
+10399914
+10443552
+11270235 # "Passeggiata del Rio Tigia - Titschenbachpromenade"
+11270309 # "Passeggiata delle Sorgenti - Quellenpromenade"
+11322144
+11755635
+12150790 # "Giro dei Capitelli - Kapellenrunde"
+
+3562051 # Hike 5 160m Umweg wegen Bauarbeiten
+
+--gk-warn
+516
+547
+Pinatzweg
+Bürgstallstöckl
+Almenrundweg
+Karnischer Höhenweg
+Dolomiten Höhenweg
+Europäischer Fernwanderweg
+...

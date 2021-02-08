@@ -198,28 +198,24 @@ touch/import_dem: data/dtm-warped.tif
 	raster2pgsql -s $(SRS_OSM) -d -C -I -M -e -t auto $^ public.raster_dtm | $(PSQL_OSM) -q
 	touch $@
 
-data: data/hiking-trails.json      \
-	data/hiking-trails-west.json   \
-	data/hiking-trails-center.json \
-	data/hiking-trails-east.json   \
-	data/mtb-tours.json            \
-	data/bicycle-lanes.json        \
-	data/ski-pistes.json           \
+data: data/hiking-trails.geojson       			\
+	data/hiking-trails-wipptal.geojson    		\
+	data/hiking-trails-eisacktal.geojson  		\
+	data/hiking-trails-pustertal.geojson    	\
+	data/hiking-trails-salten-schlern.geojson	\
+	data/mtb-tours.json            		\
+	data/bicycle-lanes.json        		\
+	data/ski-pistes.json           		\
 	data/landuse-plan.json
 
 # get HikingTrails manually from http://geokatalog.buergernetz.bz.it/geokatalog/
 # use this as data layer in JOSM
 data/hiking-trails.geojson: downloadService/HikingTrails.geojson
-	$(OGR2_BASE) -spat $(BBOX_WGS) $@ $< -nlt LINESTRING
+	$(OGR2_BASE) -spat $(BBOX_WGS) -nlt LINESTRING $@ $<
 
-data/hiking-trails-west.geojson: downloadService/HikingTrails.geojson
-	$(OGR2_BASE) -spat 10.3 $(YMIN) 11.2 $(YMAX) $@ $< -nlt LINESTRING
-
-data/hiking-trails-center.geojson: downloadService/HikingTrails.geojson
-	$(OGR2_BASE) -spat 11.2 $(YMIN) 11.7 $(YMAX) $@ $< -nlt LINESTRING
-
-data/hiking-trails-east.geojson: downloadService/HikingTrails.geojson
-	$(OGR2_BASE) -spat 11.7 $(YMIN) 12.6 $(YMAX) $@ $< -nlt LINESTRING
+data/hiking-trails-%.geojson: downloadService/HikingTrails.geojson data/%.extent
+	$(RM) $@
+	$(OGR2_BASE) -spat $(file < data/$*.extent) -nlt LINESTRING $@ $<
 
 # get SkiPistes manually from http://geokatalog.buergernetz.bz.it/geokatalog/
 # use this as data layer in JOSM

@@ -1,17 +1,23 @@
 #!/usr/bin/python3
 
-import collections
-import os
+import logging
+from logging import ERROR, WARN, INFO, DEBUG
 from pathlib import Path
 import pprint
+import re
+import sys
+from multiprocessing import Pool
 
 import requests
-import sqlalchemy
 import osmapi
 
 import shapely.ops
-from shapely.geometry import MultiLineString, LineString, MultiPoint, Point, MultiPolygon, Polygon, box
+from shapely.geometry import MultiLineString, LineString, MultiPoint, Point, MultiPolygon, Polygon, LinearRing, box
+from shapely import wkt, wkb
 
+from tqdm import tqdm
+
+connect = sys.modules[__name__] # pseudo-import this module
 
 MY_UID = 8199540
 
@@ -19,142 +25,42 @@ BOUNDARY_ST = (
     47046, # South Tyrol
 )
 
-BOUNDARY_REL = (
-    47242, # Sëlva
-    47244, # S. Crestina
-    47265, # Urtijëi
-)
-
-BOUNDARY_REL2 = (
-    47234, # Ciastel
-    47275, # Laion
-    47274, # Waidbruck
-    47232, # Völs
-    47218, # Tiers
-
-    47252, # Corvara
-    47255, # Badia
-    47276, # St. Martin de Tor
-    47278, # Mareo
-    47289, # La Val
-
-    47285, # Toblach
-    47286, # Sexten
-    47301, # Prags
-    47309, # Innichen
-    47311, # Olang
-    47312, # Welsberg
-    47313, # Niederdorf
-    47316, # St. Lorenzen
-    47317, # Bruneck
-    47324, # Kiens
-    47326, # Pfalzen
-    47327, # Vintl
-    47333, # Terenten
-
-    47277, # Villnöß
-    47292, # Klausen
-    47298, # Feldthurns
-    47287, # Villanders
-    47266, # Barbian
-
-    47300, # Brixen
-    47306, # Lüsen
-    47307, # Vahrn
-    47314, # Schabs
-    47321, # Rodeneck
-    47322, # Franzensfeste
-    47323, # Mühlbach
-    47330, # Freienfeld
-
-    47212, # Karneid
-    47164, # Welschnofen
-    47145, # Deutschnofen
-    47122, # Aldein
-    47102, # Truden
-    47075, # Altrei
-    47089, # Montan
-    47080, # Neumarkt
-    47045, # Salurn
-)
-
-BOUNDARY_REL_XXX = (
-    47233, # Ritten
-    47282, # Sarntal
-
-    47207, # Bozen
-    47187, # Leifers
-    47173, # Branzoll
-    47139, # Auer
-    47119, # Tramin
-)
-
-IGNORE = {
-      38304, # E66
-     934999, # Hike Sentiero Europeo E5, Italia
-    1736379, # Traumpfad München-Venedig
-    2460773, # Ciclovia del Sole
-    2759974, # EuroVelo 7 - Sun Route - part Italy 1
-    2770634, # EuroVelo 7 - Sun Route - part Austria
-    3968183, # 960X Korridorbus Innsbruck - Lienz
-    3970708, # 960X Korridorbus Lienz - Innsbruck
-    4587693, # Bus: BELLUNO - AGORDO - ALLEGHE - ARABBA - CORVARA - COLFOSCO
-    6504729, # Bicycle: "Munich-Venice
-    9218098, # Via Romea
-    3312655, # Via Claudia Augusta
-    6032965, # Cammino del beato Enrico
-   10694060, # E45 (reason: oneways and no forward / backward)
-    6980895, # Bus 101 Penia Trento
-     113579, # Bus 101 Trento Penia
-      66701, # Bus 102 Trento Cavalese
-    6970784, # Bus 102 Cavalese Trento
-    3118896, # Sentiero Botanico sul dossone di Cembra (missing segment)
-    4222607, # mtb trudner horn (unofficial and a mess)
-     949981, # B100 Drautal Straße
-
-    1753217, # Strada Statale 51 di Alemagna (Tratto ANAS)
-    1405697, # Strada Statale 52 Carnica
-    1754080, # Strada Provinciale 49 di Misurina
-     186221, # 03 Südalpenweg
-   10102927, # R1 Drauradweg
-    9741603, # Hike Herz-Ass Villgratental
-    7392620, # Cortina 108A
-    1116692, # Cortina 149
-    8490449, # Cortina 155
-    8483592, # Cortina 159
-    3107761, # ÖAV
-    1116678, # ÖAV 471
-   12104164, # ÖAV Bonner Höhenweg
-    3107942, # ÖAV Heimatsteig
-    3107762, # ÖAV 403 Karnischer Höhenweg
-    1163255, # ÖAV 403 Karnischer Höhenweg
-
-    7397080, # N01 Ferrata Masare etc.
-    7392618, # "Silvano De Romedi"
-
-
-
-
-
-
-}
-"""Routes we don't want checked, eg. monster routes that go far outside our
-area of interest."""
-
 CHUNKS = {
-     959876 : 2, # LS64 Kastelruth - St. Ulrich
-    1657836 : 2, # AV3 (incomplete mapping)
+     934999 : 2, # Hike: "Sentiero Europeo E5, Italia", Gap @ Bolzano
+     959876 : 2, # Road: LS64 Gap @ Kastelruth
+    1657836 : 2, # Hike: AV3 (incomplete mapping)
 }
 """Expected no. of chunks for routes that for some reason have more than one
 chunk."""
 
-CHECKED_TYPES = ('foot', 'hiking', 'worship', 'bicycle', 'mtb', 'piste', 'ski', 'bus', 'road')
+HIKING_TYPES = ('foot', 'hiking', 'abandoned:hiking', 'worship')
+""" Hiking route types. """
+
+CHECKED_TYPES = HIKING_TYPES + ('bicycle', 'mtb', 'piste', 'ski', 'bus', 'road')
 """ Route types we check. """
 
-def way_is_way (way):
+
+# Transform a string so that numbers in the string sort naturally.
+#
+# Transform any contiguous run of digits so that it sorts
+# naturally during an alphabetical sort. Every run of digits gets
+# the length of the run prepended, eg. 123 => 3123, 123456 =>
+# 6123456.
+
+def natural_sort (s):
+    def f (m):
+        s = m.group (0)
+        return str (len (s)) + s
+    return re.sub ('\d+', f, s)
+
+
+def way_is_way (way, clip_exceptions = False):
     # only consider these kinds of ways
 
-    wtags = way['tag']
+    wtags = way.get ('tags')
+    if clip_exceptions and 'geokatalog:exception' in wtags:
+        return False
+
     return wtags and ('highway'    in wtags or
                       'railway'    in wtags or
                       'aerialway'  in wtags or
@@ -164,17 +70,17 @@ def way_is_way (way):
 def way_is_area (way):
     # check if the way should be treated as area
     # in an area all points are valid entry and exit points
-    wtags  = way['tag']
-    wnodes = way['nd']
+    wtags  = way.get ('tags')
+    wnodes = way.get ('nodes')
 
-    area       = wtags.get ('area', '') == 'yes'
-    roundabout = wtags.get ('junction', '') in ('roundabout', 'circular')
+    area       = wtags and wtags.get ('area', '') == 'yes'
+    roundabout = wtags and wtags.get ('junction', '') in ('roundabout', 'circular')
     closed     = wnodes[0] == wnodes[-1]
     return closed and (area or roundabout)
 
 
 def format_route (relation):
-    rtags  = relation['tag']
+    rtags  = relation['tags']
     rel_id = relation['id']
 
     route = rtags.get ('route', '')
@@ -219,7 +125,7 @@ def format_gk_route (props):
 
 def query (q):
     url = "http://overpass-api.de/api/interpreter"
-    q   = "[out:json][timeout:25];\n\n%s" % q
+    q   = "[out:json];\n\n%s" % q
 
     r = requests.post (url, data = {'data' : q})
     r.raise_for_status ()
@@ -227,9 +133,8 @@ def query (q):
     return r.json ().get ('elements', [])
 
 
-
 def relations_in_areas (area_ids, types = CHECKED_TYPES):
-    areas = ''.join ('area(%d);' % (3600000000 + id_) for id_ in area_ids)
+    areas = ''.join ('area(%d);' % (3600000000 + int (id_)) for id_ in area_ids)
     types = '|'.join (types)
 
     q = """
@@ -237,45 +142,30 @@ def relations_in_areas (area_ids, types = CHECKED_TYPES):
     (
         relation["route"~"{types}"](area.location);
     );
-    out ids tags bb;
+    out ids;
     """.format (areas = areas, types = types)
 
     return query (q)
 
-def relations_in_bbox (bbox, types = CHECKED_TYPES):
-    bbox  = ', '.join ([str (b) for b in bbox])
-    types = '|'.join (types)
 
-    q = """
-    (
-        relation["route"~"{types}"]({bbox});
-    );
-    out ids tags bb;
-    """.format (bbox = bbox, types = types)
+def osm_relation_as_multilinestring (rfull, clip_exceptions = False):
+    """ Return an OSM relations as multilinestring.
 
-    return query (q)
+    Optionally remove ways marked as exceptions.
+    """
 
+    relation = rfull[-1]
 
-def osm_relation_as_nodeset (rfull):
-    """ Return all nodes in route in random order. """
+    nodes_dict = dict ([(n['id'], n) for n in rfull if n['type'] == 'node'])
+    ways_dict  = dict ([(w['id'], w) for w in rfull if w['type'] == 'way'])
 
-    relation = rfull[-1]['data']
-    return [Point (n['data']['lon'], n['data']['lat']) for n in rfull if n['type'] == 'node']
-
-
-def osm_relation_as_multilinestring (rfull):
-
-    relation = rfull[-1]['data']
-
-    nodes_dict = dict ([(n['data']['id'], n['data']) for n in rfull if n['type'] == 'node'])
-    ways_dict  = dict ([(w['data']['id'], w['data']) for w in rfull if w['type'] == 'way'])
-
-    ways = [ m['ref'] for m in relation['member'] if m['type'] == 'way' ]
+    ways = [ ways_dict[m['ref']] for m in relation['members'] if m['type'] == 'way' ]
 
     lines = []
     for way in ways:
-        nodes = ways_dict[way]['nd']
-        lines.append (LineString ([ (nodes_dict[n]['lon'], nodes_dict[n]['lat']) for n in nodes ]))
+        if way_is_way (way, clip_exceptions):
+            nodes = way['nodes']
+            lines.append (LineString ([ (nodes_dict[n]['lon'], nodes_dict[n]['lat']) for n in nodes ]))
 
     mls = shapely.ops.linemerge (lines)
     if mls.type == 'LineString':
@@ -283,85 +173,60 @@ def osm_relation_as_multilinestring (rfull):
     return mls
 
 
-def areas_as_polygon (area_ids):
-    polys = []
-    for area_id in area_ids:
-        # print ("resolving area %d" % area_id)
-        rfull = api.RelationFull (area_id)
-        relation = rfull[-1]['data']
+def get_area (area_id):
+    area_id = int (area_id)
+    rfull = relation_full (area_id)
+    relation = rfull[-1]
+    # log (DEBUG, "relation %s" % relation)
 
-        nodes_dict = dict ([(n['data']['id'], n['data']) for n in rfull if n['type'] == 'node'])
-        ways_dict  = dict ([(w['data']['id'], w['data']) for w in rfull if w['type'] == 'way'])
+    nodes_dict = dict ([(n['id'], n) for n in rfull if n['type'] == 'node'])
+    ways_dict  = dict ([(w['id'], w) for w in rfull if w['type'] == 'way'])
 
-        ways = [ m['ref'] for m in relation['member'] if m['type'] == 'way' and m['role'] == 'outer' ]
-        lines = []
-        for way in ways:
-            nodes = ways_dict[way]['nd']
-            lines.append (LineString ([ (nodes_dict[n]['lon'], nodes_dict[n]['lat']) for n in nodes ]))
+    ways = [ m['ref'] for m in relation['members'] if m['type'] == 'way' and m['role'] == 'outer' ]
+    lines = []
+    for way in ways:
+        nodes = [ nodes_dict[n] for n in ways_dict[way]['nodes'] ]
+        ls = LineString ([ (n['lon'], n['lat']) for n in nodes ])
+        assert ls.is_simple, "way %d is not simple" % way
+        lines.append (ls)
 
-        polys += list (shapely.ops.polygonize (lines))
+    ls = shapely.ops.linemerge (lines)
+    assert ls.type == 'LineString', "Area %d is not a LineString" % area_id
+    assert ls.is_simple,            "Area %d is not simple" % area_id
+    assert ls.is_ring,              "Area %d is not a ring" % area_id
 
-    return shapely.ops.unary_union (polys)
+    result, dangles, cuts, invalids = shapely.ops.polygonize_full (ls)
+    #log (DEBUG, "result: %s"   % result.wkt[:1000])
+    #log (DEBUG, "dangles: %s"  % dangles.wkt[:1000])
+    #log (DEBUG, "cuts: %s"     % cuts.wkt[:1000])
+    #log (DEBUG, "invalids: %s" % invalids.wkt[:1000])
 
+    polys = list (result)
 
-def relations_in_boundary (boundary, types = CHECKED_TYPES):
-    rows = conn.execute (sqlalchemy.text ("""
-    SELECT r.id AS rel_id, r.tags as tags
-    FROM snapshot.relations r
-      JOIN snapshot.relation_members mn ON r.id = mn.relation_id
-        JOIN snapshot.ways w ON w.id = mn.member_id
-    WHERE ST_Intersects (:boundary, w.linestring)
-      AND r.tags->'route' IN :checked
-      AND COALESCE (r.tags->'name', '') !~ 'Flixbus'
-    GROUP BY r.tags->'route', natsort (r.tags->'ref'), r.tags->'name', r.id
-    ORDER BY r.tags->'route', natsort (r.tags->'ref'), r.tags->'name', r.id
-    """), { 'boundary' : boundary, 'checked' : types })
-
-    Relations = collections.namedtuple ('Relations', 'rel_id, tags')
-    return [ Relations._make (r) for r in rows ]
+    assert len (polys) == 1, "Area %d must have 1 polygon (but has %d instead)" % (area_id, len (polys))
+    return polys
 
 
-params = {
-    'host'     : os.environ.get ('PGHOST')     or 'localhost',
-    'port'     : os.environ.get ('PGPORT')     or '5432',
-    'database' : os.environ.get ('PGDATABASE') or 'osm',
-    'user'     : os.environ.get ('PGUSER')     or 'osm',
-}
+def relation_full (rel_id):
+    url = 'https://api.openstreetmap.org/api/0.6/relation/{rel_id}/full.json'
+    r = requests.get (url.format (rel_id = rel_id))
+    r.raise_for_status ()
 
-engine = sqlalchemy.create_engine (
-    "postgresql+psycopg2://{user}@{host}:{port}/{database}".format (**params)
-)
-
-conn = engine.connect ()
-
-api = osmapi.OsmApi (passwordfile = Path ("~/.osmpass").expanduser ())
-
-#result = relations_in_areas ([47242, 47244])
-#for r in result:
-#    print (r['id'])
-#    tags = r['tags']
-#    print ("Name: %s" % tags.get ("name", tags.get ("ref", "n/a")))
-#    bounds = r['bounds']
-#    print (bounds)
+    return r.json ()['elements']
 
 
-sql = """WITH boundaries AS (
-SELECT ST_Polygonize (w.linestring) AS boundary
-FROM snapshot.relations r
-    JOIN snapshot.relation_members mn ON mn.relation_id = r.id
-    JOIN snapshot.ways w              ON w.id = mn.member_id
-WHERE r.id IN :boundaries
-GROUP BY r.id
-)
+def init ():
+    connect.log = logging.getLogger ().log
+    connect.api = osmapi.OsmApi (passwordfile = Path ("~/.osmpass").expanduser ())
 
-SELECT ST_Union (boundary) AS boundary FROM boundaries
-"""
+    area_ids = BOUNDARY_ST + tuple (sys.args.areas)
+    with Pool () as p:
+        polys = list (tqdm (
+            p.imap (get_area, area_ids),
+            total = len (area_ids),
+            desc = 'Areas'
+        ))
 
-boundary_south_tyrol = areas_as_polygon (BOUNDARY_ST)
-boundary             = areas_as_polygon (BOUNDARY_REL)
-
-#rows = conn.execute (sqlalchemy.text (sql), { 'boundaries' : BOUNDARY_REL })
-#boundary = rows.fetchone ()[0]
-
-#rows = conn.execute (sqlalchemy.text (sql), { 'boundaries' : BOUNDARY_ST })
-#boundary_south_tyrol = rows.fetchone ()[0]
+    polys = [p for sublist in polys for p in sublist] # flatten list of lists
+    connect.boundary_south_tyrol = polys.pop (0)
+    connect.boundary = shapely.ops.unary_union (polys)

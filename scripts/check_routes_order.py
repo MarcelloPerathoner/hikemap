@@ -1,13 +1,27 @@
 #!/usr/bin/python3
 
+"""An OSM route checker.
+
+Checks:
+
+- if routes are connected,
+- forward / backward in road relations,
+- oneways in cycle and bus routes,
+- and correct order of stops in bus routes.
+
+Also can compare OSM hiking routes against their counterpart in `geokatalog.provinz.bz.it`.
+
+"""
+
+import argparse
 import collections
 import itertools
+import logging
+from logging import ERROR, WARN, INFO, DEBUG
 import operator
 import json
 import re
-
-import osmapi
-import sqlalchemy
+import sys
 
 import connect
 import hausdorff as hd
@@ -21,7 +35,7 @@ def check_osmc_symbol (rtags):
     if sym:
         m = re.match (r'^(.*?):red:white_', sym)
         if m and m.group (1) != 'red':
-            errors.append ('  Bogus osmc:symbol {sym}'.format (sym = sym))
+            errors.append ((ERROR, '  Bogus osmc:symbol {sym}'.format (sym = sym)))
 
         if ref:
             rx = ':%s:' % ref
@@ -43,7 +57,7 @@ def check_osmc_symbol (rtags):
                 rx = '^red::gray_triangle:V:blue$'
 
             if not re.search (rx, sym):
-                errors.append ('  Ref {ref} and osmc:symbol {sym} mismatch.'.format (ref = ref, sym = sym))
+                errors.append ((ERROR, '  Ref {ref} and osmc:symbol {sym} mismatch.'.format (ref = ref, sym = sym)))
                 # errors.append ('  rx = {rx}'.format (rx = rx))
 
     return errors
@@ -53,11 +67,11 @@ def check_stop_tags (stops):
     errors = []
 
     for stop in stops:
-        stags = stop['tag']
+        stags = stop['tags']
 
         pt = stags.get ('public_transport')
         if pt != 'stop_position':
-            errors.append ('  Stop {id} is missing tags.'.format (id = stop['id']))
+            errors.append ((ERROR, '  Stop {id} is missing tags.'.format (id = stop['id'])))
 
     return errors
 
@@ -68,26 +82,26 @@ def check_network (rtags):
     errors = []
 
     rx = None
-    if route in ('foot', 'hiking'):
+    if route in connect.HIKING_TYPES:
         rx = r'^[lrni]wn$'
     if route == 'bicycle':
         rx = r'^[lrni]cn$'
 
     if rx:
         if network is None:
-            errors.append ('  No network in route')
+            errors.append ((ERROR, '  No network in route'))
         else:
             m = re.search (rx, network)
             if not m:
-                errors.append ('  Bogus network {nw} in route'.format (nw = network))
+                errors.append ((ERROR, '  Bogus network {nw} in route'.format (nw = network)))
 
     return errors
 
 
 def ways_ok (rfull, ways, stops = [], direction = ''):
-    relation = rfull[-1]['data']
+    relation = rfull[-1]
 
-    rtags  = relation['tag']
+    rtags  = relation['tags']
     route  = rtags['route']
     rel_id = relation['id']
     expected_chunks = connect.CHUNKS.get (rel_id, 1)
@@ -104,8 +118,8 @@ def ways_ok (rfull, ways, stops = [], direction = ''):
 
     # to know the first way's orientation we have to peek at the second way
     if len (ways) > 1:
-        w0nodes = ways[0]['nd']
-        w1nodes = ways[1]['nd']
+        w0nodes = ways[0]['nodes']
+        w1nodes = ways[1]['nodes']
         if connect.way_is_area (ways[0]):
             # route can start with any node of the first way
             last_nodes = set ( w0nodes )
@@ -119,8 +133,8 @@ def ways_ok (rfull, ways, stops = [], direction = ''):
     next_stop = stops.pop (0) if stops else None
 
     for way in ways:
-        wtags   = way['tag']
-        wnodes  = way['nd']
+        wtags   = way['tags']
+        wnodes  = way['nodes']
         reverse = None # do we use the way in reverse direction?
 
         roundabout = wtags.get ('junction', '') in ('roundabout', 'circular')
@@ -137,7 +151,7 @@ def ways_ok (rfull, ways, stops = [], direction = ''):
         oneway = oneway or roundabout   # roundabout implies oneway for vehicles
         if 'aerialway' in wtags:
             oneway = True # mtb tours
-        if route in ('foot', 'hiking', 'worship'):
+        if route in connect.HIKING_TYPES:
             oneway = False
 
         if is_area:
@@ -156,12 +170,12 @@ def ways_ok (rfull, ways, stops = [], direction = ''):
             chunks.append (chunk)
             chunk = []
             if oneway:
-                error_msgs.append ('  Oneway violation in way "%s" (%d)' %
-                                   (wtags.get ('name', 'unnamed'), way['id']))
+                error_msgs.append ((ERROR, '  Oneway violation in way "%s" (%d)' %
+                                   (wtags.get ('name', 'unnamed'), way['id'])))
             else:
                 if expected_chunks == 1:
-                    error_msgs.append ('  Route disconnected at way "%s" (%d)' %
-                                       (wtags.get ('name', 'unnamed'), way['id']))
+                    error_msgs.append ((ERROR, '  Route disconnected at way "%s" (%d)' %
+                                       (wtags.get ('name', 'unnamed'), way['id'])))
 
         if is_area:
             # route can exit by any node
@@ -185,7 +199,7 @@ def ways_ok (rfull, ways, stops = [], direction = ''):
         if next_stop:
             for node_id in (reversed (wnodes) if reverse else wnodes):
                 if node_id == next_stop['id']:
-                    stop_tags = next_stop['tag']
+                    stop_tags = next_stop['tags']
                     # next stop reached
                     name = stop_tags.get ('name', 'unnamed')
                     # print ('  Stop reached "%s" %s road' % (name, 'in reversed' if reverse else ''))
@@ -198,35 +212,35 @@ def ways_ok (rfull, ways, stops = [], direction = ''):
 
     if stops:
         stop_id = stops[0]['id']
-        stags = stops[0]['tag']
+        stags = stops[0]['tags']
         name = stags.get ('name', '<noname>')
-        error_msgs.append ('  Stop "{name}" ({stop_id}) not reached'.format (name = name, stop_id = stop_id))
+        error_msgs.append ((ERROR, '  Stop "{name}" ({stop_id}) not reached'.format (name = name, stop_id = stop_id)))
 
     chunks.append (chunk)
     if len (chunks) != expected_chunks:
-        error_msgs.append (
+        error_msgs.append ((ERROR,
             '  Route {direction} in DISORDER ({fc}/{ec})'.format (
                 direction = direction,
                 fc = len (chunks),
                 ec = expected_chunks,
             )
-        )
+        ))
 
     return error_msgs, chunks
 
 
 def route_ok (rfull):
-    relation = rfull[-1]['data']
-    rtags    = relation['tag']
+    relation = rfull[-1]
+    rtags    = relation['tags']
     route    = rtags['route']
-    members  = relation['member']
+    members  = relation['members']
 
     errors = []
 
     errors += check_osmc_symbol (rtags)
     errors += check_network (rtags)
 
-    ways_dict = dict ([(w['data']['id'], w['data']) for w in rfull if w['type'] == 'way'])
+    ways_dict = dict ([(w['id'], w) for w in rfull if w['type'] == 'way'])
 
     oneway = rtags.get ('oneway', 'yes') == 'yes'
     forward_backward = any ([w['role'] in ('forward', 'backward') for w in members])
@@ -243,7 +257,7 @@ def route_ok (rfull):
     else:
         ways = [ ways_dict[w['ref']] for w in members if w['type'] == 'way' and w['role'] in ('', 'start')]
         if route == 'bus':
-            nodes_dict = dict ([(n['data']['id'], n['data']) for n in rfull if n['type'] == 'node'])
+            nodes_dict = dict ([(n['id'], n) for n in rfull if n['type'] == 'node'])
             stops = [ nodes_dict[n['ref']] for n in members
                       if n['type'] == 'node' and n['role'] in ('stop', 'stop_exit_only', 'stop_entry_only') ]
             err, chunks = ways_ok (rfull, ways, stops)
@@ -253,77 +267,201 @@ def route_ok (rfull):
             err, chunks = ways_ok (rfull, ways, [])
             errors += err
 
-    if (route in ('foot', 'hiking', 'worship')
-        and not re.match (r'AV|E|SI|VA', rtags.get ('ref', ''))
-        and not 'via_ferrata_scale' in rtags
-        and not rtags.get ('hiking') == 'via_ferrata'):
-
-        errors += hd.check_osm_covered (rfull)
-
-    if errors:
-        errors.insert (0, '{r}'.format (r = connect.format_route (relation)))
-
     return errors
 
-#
-# get all route relations that intersect our area of interest
-#
 
-interesting_relations = connect.relations_in_areas (connect.BOUNDARY_REL, ('foot', 'hiking', 'worship'))
-checked_relations = 0
-faulty_relations = set ()
+class Formatter (logging.Formatter):
+    """ Logging formatter. Allows colorful formatting of log lines. """
 
-hd.init (
-    interesting_relations,
-    (
-        'data/hiking-trails-east.geojson',
-        'data/hiking-trails-center.geojson'
+    COLORS = {
+        logging.CRITICAL : ('\x1B[38;2;255;0;0m',  '\x1B[0m'),
+        logging.ERROR    : ('\x1B[38;2;255;0;0m',  '\x1B[0m'),
+        logging.WARN     : ('\x1B[38;2;255;64;0m', '\x1B[0m'),
+        logging.INFO     : ('', ''),
+        logging.DEBUG    : ('', ''),
+    }
+
+    def format (self, record):
+        record.esc0, record.esc1 = self.COLORS[record.levelno]
+        return super ().format (record)
+
+
+def init_logging (args, *handlers):
+    """ Init the logging stuff. """
+
+    LOG_LEVELS = {
+        0: logging.ERROR,     #
+        1: logging.WARN,      # -v
+        2: logging.INFO,      # -vv
+        3: logging.DEBUG      # -vvv
+    }
+    args.log_level = LOG_LEVELS.get (args.verbose, logging.DEBUG)
+
+    root = logging.getLogger ()
+    root.setLevel (args.log_level)
+
+    formatter = Formatter (
+        fmt = '{esc0}{relativeCreated:6.0f} - {levelname:7} - {message}{esc1}',
+        style='{'
     )
-)
 
-for rel in interesting_relations:
-    errors = []
-    rel_id = rel['id']
-    if rel_id in connect.IGNORE:
-        continue
+    if not handlers:
+        handlers = [logging.StreamHandler ()] # stderr
 
-    try:
-        rfull = connect.api.RelationFull (rel_id)
-        relation = rfull[-1]['data']
-        rtags = relation['tag']
+    for handler in handlers:
+        handler.setFormatter (formatter)
+        root.addHandler (handler)
 
-        route = rtags['route']
-        if route not in connect.CHECKED_TYPES:
+
+class MyArgumentParser (argparse.ArgumentParser):
+    def convert_arg_line_to_args (self, line):
+        # allow comments in @file
+        bc = line.partition ('#')[0]
+        if bc:
+            return [bc.strip ()]
+        return []
+
+
+def build_parser ():
+    parser = MyArgumentParser (description = __doc__, fromfile_prefix_chars = '@')
+
+    parser.add_argument ('-v', '--verbose', action='count',
+                         help='increase output verbosity', default=0)
+    parser.add_argument ('-a', '--areas', nargs='+',
+                         metavar='OSM_RELID',
+                         help='OSM id of area')
+    parser.add_argument ('-r', '--routes', nargs='*',
+                         metavar='ROUTE',
+                         help='routes to analyze (%s)' % ', '.join (connect.CHECKED_TYPES),
+                         choices = connect.CHECKED_TYPES,
+                         default = connect.CHECKED_TYPES)
+    parser.add_argument ('-g', '--geokatalog', nargs='*',
+                         metavar='path/to/geokatalog.geojson',
+                         help="load geokatalog geojson file")
+    parser.add_argument ('--osm-ignore', nargs='*', type=int, dest='osm_ignore',
+                         metavar='OSM_RELID',
+                         default = [],
+                         help="ignore these OSM routes")
+    parser.add_argument ('--osm-warn', nargs='*', type=int, dest='osm_warn',
+                         metavar='OSM_RELID',
+                         default = [],
+                         help="convert errors into warnings for these OSM routes")
+    parser.add_argument ('--gk-warn', nargs='*', dest='gk_warn',
+                         metavar='GEOKATALOG_ID',
+                         default = [],
+                         help="convert errors into warnings for these geokatalog routes")
+    parser.add_argument ('--write-areas-bbox',
+                         metavar='FILENAME',
+                         help="output boundary of selected areas in WKT format")
+    return parser
+
+
+if __name__ == '__main__':
+
+    # just pin this on sys, makes it easy to pass around and is global anyway
+    sys.args = build_parser ().parse_args ()
+
+    init_logging (
+        sys.args,
+        logging.StreamHandler (), # stderr
+        logging.FileHandler ('check_routes.log')
+    )
+
+    log = logging.getLogger ().log
+
+    #
+    # get all route relations that intersect our area of interest
+    #
+
+    connect.init ()
+
+    # maybe just output areas
+
+    if sys.args.write_areas_bbox:
+        with open (sys.args.write_areas_bbox, 'w') as fp:
+            fp.write ("{:.6f} {:.6f} {:.6f} {:.6f}".format (*connect.boundary.bounds))
+        sys.exit ()
+
+    log (INFO, 'querying overpass for route relations in areas ...')
+    osm_relations = connect.relations_in_areas (sys.args.areas, sys.args.routes)
+    log (INFO, 'got %d route relations from overpass' % len (osm_relations))
+
+    hd.init (osm_relations, sys.args.geokatalog)
+
+    log (INFO, 'start checking OSM routes')
+
+    checked_relations = 0
+    faulty_relations = set ()
+
+    def osm_route_key (i):
+        rtags = i[1]['rfull'][-1]['tags']
+        return connect.natural_sort (rtags.get ('ref', rtags.get ('name', '')))
+
+    for rel_id, data in sorted (hd.osm_routes.items (), key = osm_route_key):
+        log (DEBUG, 'checking OSM route %s' % rel_id)
+
+        errors = []
+        if rel_id in sys.args.osm_ignore:
             continue
 
-        if 'fixme' in rtags:
-            continue
+        try:
+            rfull = data['rfull']
+            relation = rfull[-1]
+            rtags = relation['tags']
+            context = connect.format_route (relation)
 
-        # print (json.dumps (rfull, indent=4, sort_keys=True, default=lambda o: '<not serializable>'))
-        errors += route_ok (rfull)
-        checked_relations += 1
+            route = rtags['route']
+            if route not in connect.CHECKED_TYPES:
+                continue
 
+            fixme = rtags.get ('fixme')
+            if fixme:
+                errors.append ((ERROR, '%s - fixme: %s' % (context, fixme)))
+
+            errors += route_ok (rfull)
+            checked_relations += 1
+
+            # check against geokatalog
+
+            if (sys.args.geokatalog
+                and route in connect.HIKING_TYPES
+                and not re.match (r'AV|E|SI|VA', rtags.get ('ref', ''))
+                and not 'via_ferrata_scale' in rtags
+                and not rtags.get ('hiking') == 'via_ferrata'):
+
+                hd.check_osm_covered (rel_id, errors)
+
+            if errors:
+                level = WARN if rel_id in sys.args.osm_warn else ERROR
+                for level, error in errors:
+                    log (level, "%s - %s" % (context, error))
+
+        except Exception as e:
+            print (e)
+
+    log (INFO, 'Checked relations: %d' % checked_relations)
+    log (INFO, 'Faulty relations:  %d' % len (faulty_relations))
+    log (INFO, 'Faulty relation ids: ' + ' '.join ([str (rel) for rel in sorted (faulty_relations)]))
+
+    # Check all routes in geokatalog
+
+    log (INFO, 'start checking GK routes')
+
+    def gk_route_key (i):
+        props = i[1]['properties']
+        return connect.natural_sort (props.get ('WEGENR', props.get ('ROUTENNAME', '')))
+
+    for gk_id, gk_item in sorted (hd.gk_routes.items (), key = gk_route_key):
+        errors = []
+        hd.check_geokatalog_covered (gk_id, errors)
         if errors:
-            print ('\n'.join (errors))
-            faulty_relations.add (rel_id)
+            gk_props = gk_item['properties']
+            gk_ref   = gk_props.get ('WEGENR',     '')
+            gk_name  = gk_props.get ('ROUTENNAME', '')
 
-    except osmapi.ElementDeletedApiError:
-        # route was deleted, nothing to report
-        pass
+            level = WARN if (gk_name in sys.args.gk_warn or gk_ref in sys.args.gk_warn) else ERROR
+            context = connect.format_gk_route (gk_props)
+            for level, error in errors:
+                log (level, "%s - %s" % (context, error))
 
-    except osmapi.MaximumRetryLimitReachedError as e:
-        print (e)
-
-
-# Check all routes in geokatalog
-
-for gk_id in hd.gk_routes.keys ():
-    errors = []
-    errors += hd.check_geokatalog_covered (gk_id)
-    if errors:
-        print ('\n'.join (errors))
-
-
-print ('Checked relations: %d' % checked_relations)
-print ('Faulty relations:  %d' % len (faulty_relations))
-print ('Faulty relation ids: ' + ' '.join ([str (rel) for rel in sorted (faulty_relations)]))
+    log (INFO, 'Done')

@@ -2,26 +2,34 @@
 
 import collections
 import itertools
+import logging
+from logging import ERROR, WARN, INFO, DEBUG
 import math
 import operator
 import json
 import re
 import sys
+from multiprocessing import Pool
 
-import osmapi
-import sqlalchemy
+import requests
+
+from pyproj import Transformer
 
 import scipy.spatial.distance
 
 from shapely.strtree import STRtree
 import shapely.ops
 from shapely import wkt, wkb
-from shapely.geometry import MultiLineString, LineString, MultiPoint, Point, Polygon, box
+from shapely.geometry import MultiLineString, LineString, MultiPoint, Point, Polygon
+from shapely.geometry import box, mapping
 from shapely.prepared import prep
 
-from pyproj import CRS, Transformer
+from tqdm import tqdm
+
 
 import connect
+hd = sys.modules[__name__] # pseudo-import this module
+
 
 # We test the equality of an osm-route and geokatalog-route in two steps:
 #
@@ -48,7 +56,7 @@ RESAMPLE = 100.0
 # osm api data is also in WGS
 # we transform both into a projection that allows easy distance calculations
 transformer  = Transformer.from_crs ("EPSG:4326", "EPSG:25832", always_xy = True)
-
+itransformer = Transformer.from_crs ("EPSG:25832", "EPSG:4326", always_xy = True)
 
 def dist (a, b):
     """ Since we are using UTM we can use a simple euclidean distance. """
@@ -103,100 +111,196 @@ def resample (geom, threshold):
     return geom
 
 
+def clip_st (geom):
+    """ Clip geometry to South Tyrol.
+
+    Take of the routes only what's inside South Tyrol because in geokatalog
+    many routes are drawn only up to or little beyond the border.
+    """
+
+    splits = shapely.ops.split (geom, boundary_south_tyrol_utm)
+
+    # N.B.: This convoluted way is actually faster than filtering the
+    # points like: filter (boundary_south_tyrol_utm.contains, line.coords)
+    lines = []
+    for l in splits:
+        n = len (l.coords)
+        if Point (l.coords[n // 2]).within (boundary_south_tyrol_utm):
+            lines.append (l)
+
+    return MultiLineString (lines)
+
+
 # load geoportal.provinz.bz.it data
 
-boundary_utm = None
-boundary_south_tyrol_utm = None
-boundary_utm_prep = None
 gk_routes = dict ()
+osm_routes = dict ()
 gk_tree = None
 osm_tree = None
+
+
+def match_route (rtags, gk_props):
+    """ See if these routes match using metadata only.
+    Return True / False / None """
+
+    ref  = rtags.get ('ref:geokatalog', rtags.get ('ref', ''))
+    name = rtags.get ('name:geokatalog', rtags.get ('name:de', rtags.get ('name', '')))
+
+    gk_ref  = str (gk_props.get ('WEGENR',     ''))
+    gk_name = str (gk_props.get ('ROUTENNAME', ''))
+
+    if (gk_ref == ref):
+        return True
+
+    # special case for CAI Trentino Est
+    m = re.match (r'^E(\d\d\d)$', ref)
+    if m and gk_ref == m.group (1):
+        return True
+
+    if (gk_ref and ref and gk_ref != ref):
+        return False
+
+    if (gk_name != name):
+        return None
+
+    return True
+
+
+def get_relation (osm_relation):
+    rel_id = osm_relation['id']
+    try:
+        rfull = connect.relation_full (rel_id)
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 410:
+            # relation not found
+            return None
+        raise
+
+    relation = rfull[-1]
+    rtags = relation['tags']
+    geom = connect.osm_relation_as_multilinestring (rfull)
+    geom = shapely.ops.transform (transformer.transform, geom)
+    geom = clip_st (geom)
+    geom = resample (geom, RESAMPLE)
+
+    if boundary_utm_prep.intersects (geom):
+        log (DEBUG, "OSM relation %s inside boundaries" % rel_id)
+
+        return {
+            'id'         : rel_id,
+            'geometry'   : geom,
+            'properties' : rtags,
+            'rfull'      : rfull,
+        }
+
+    log (DEBUG, "OSM relation %s outside boundaries" % rel_id)
+    return None
+
+
+def process_gk_route (gk_dict):
+    lines = gk_dict['lines']
+    geom = shapely.ops.linemerge ([ wkb.loads (l, hex = True) for l in lines ])
+    if geom.type == 'LineString':
+        geom = MultiLineString ([geom])
+    geom = shapely.ops.transform (transformer.transform, geom)
+    geom = clip_st (geom)
+    geom = resample (geom, RESAMPLE)
+
+    if boundary_utm_prep.intersects (geom):
+        gk_dict['geometry'] = geom
+        return gk_dict
+
+    return None
+
 
 def init (osm_relations, filenames):
     """ Build a spatial index tree of the features. """
 
-    global boundary_utm, boundary_south_tyrol_utm, boundary_utm_prep
     global gk_routes, gk_tree, osm_tree
 
-    # poly = wkb.loads (connect.boundary, hex = True)
-    boundary_utm = shapely.ops.transform (transformer.transform, connect.boundary)
-    boundary_utm_prep = prep (boundary_utm)
+    hd.log = logging.getLogger ().log
 
-    # poly = wkb.loads (connect.boundary_south_tyrol, hex = True)
-    boundary_south_tyrol_utm = shapely.ops.transform (transformer.transform, connect.boundary_south_tyrol)
+    log (INFO, "preparing areas")
+
+    hd.boundary_utm = shapely.ops.transform (transformer.transform, connect.boundary)
+    hd.boundary_utm_prep = prep (boundary_utm)
+
+    hd.boundary_south_tyrol_utm = shapely.ops.transform (transformer.transform, connect.boundary_south_tyrol)
+    hd.boundary_south_tyrol_utm = boundary_south_tyrol_utm.simplify (10)
+    hd.boundary_south_tyrol_utm_prep = prep (boundary_south_tyrol_utm)
 
     # get osm route relations from overpass
 
-    geoms = []
-    for rel in osm_relations:
-        id_   = rel['id']
-        props = rel['tags']
-        b     = rel['bounds']
-        geom  = shapely.ops.transform (
-            transformer.transform,
-            box (b['minlon'], b['minlat'], b['maxlon'], b['maxlat'])
-        )
+    log (INFO, "getting OSM routes from OSM API")
 
-        if boundary_utm_prep.intersects (geom):
-            geom.id    = id_
-            geom.props = props
-            geoms.append (geom)
+    with Pool () as p:
+        geoms = list (tqdm (p.imap (get_relation, osm_relations),
+                            total = len (osm_relations),
+                            desc = 'OSM Routes'))
 
-    print ("hausdorff init: %d relations found in osm" % len (geoms))
+    geoms = [ g for g in geoms if g is not None ]
+    for geom in geoms:
+        osm_routes[geom['id']] = geom
+        geom['geometry'].id = geom['id']
 
-    osm_tree = STRtree (geoms)
+    osm_tree = STRtree ([ g['geometry'] for g in geoms ])
+
+    log (INFO, "  %d relations found in osm" % len (geoms))
 
     # get geokatalog routes from geojson files
 
-    geoms_by_id = collections.defaultdict (set)
-    props_by_id = dict ()
+    geoms_by_id = dict ()
 
-    for filename in filenames:
+    for filename in set (filenames):
         with open (filename, 'r') as fp:
+            log (INFO, "reading %s" % filename)
+
             data = json.load (fp)
 
             for feature in data['features']:
                 props = feature['properties']
 
                 # '.' is placeholder in geoportal data
-                ref   = props.get ('WEGENR', '.')
-                name  = props.get ('ROUTENNAME', '.')
+                ref   = str (props.get ('WEGENR', '.'))
+                name  = str (props.get ('ROUTENNAME', '.'))
                 gk_id = str (props.get ('ID'))
                 if ref == '.' and name == '.':
                     continue
 
+                coords = feature['geometry']['coordinates']
                 # coords is lon,lat
-                line = LineString (feature['geometry']['coordinates'])
-                # eliminate duplicates, wkb makes it hashable
-                geoms_by_id[gk_id].add (line.wkb_hex)
+                line = LineString (coords)
 
-                props_by_id[gk_id] = props
+                if gk_id not in geoms_by_id:
+                    geoms_by_id[gk_id] = {
+                        'id'         : gk_id,
+                        'properties' : props,
+                        'lines'      : set (),
+                    }
 
-    geoms = []
-    for gk_id, lines in geoms_by_id.items ():
-        geom = shapely.ops.linemerge ([ wkb.loads (l, hex = True) for l in lines ])
-        geom = shapely.ops.transform (transformer.transform, geom)
-        geom = resample (geom, RESAMPLE)
+                # this eliminates duplicate geometries, wkb makes it hashable
+                geoms_by_id[gk_id]['lines'].add (line.wkb_hex)
 
-        if geom.type == 'LineString':
-            geom = MultiLineString ([geom])
+    log (INFO, "processing GK routes")
 
-        if boundary_utm_prep.intersects (geom):
-            props = props_by_id[gk_id]
-            geom.props = props
-            geoms.append (geom)
-            gk_routes[gk_id] = {
-                'properties' : props,
-                'geometry'   : geom,
-            }
+    with Pool () as p:
+        geoms = list (tqdm (p.imap (process_gk_route, geoms_by_id.values ()),
+                            total = len (geoms_by_id),
+                            desc = 'GK Routes'))
 
-    print ("hausdorff init: %d relations found in geokatalog" % len (geoms))
+    geoms = [ g for g in geoms if g is not None ]
 
-    gk_tree = STRtree (geoms)
+    for geom in geoms:
+        gk_routes[geom['id']] = geom
+        geom['geometry'].id = geom['id']
+
+    gk_tree = STRtree ([ g['geometry'] for g in geoms ])
+
+    log (INFO, "  %d relations found in geokatalog" % len (geoms))
 
 
 
-def check_osm_covered (rfull):
+def check_osm_covered (rel_id, errors):
     """For every chunk in the osm route there must be a route in geokatalog with
     matching id, ref or name that covers it.
 
@@ -205,135 +309,120 @@ def check_osm_covered (rfull):
 
     """
 
-    relation = rfull[-1]['data']
-    rtags    = relation['tag']
-    route    = rtags['route']
-    members  = relation['member']
-    errors = []
+    rel    = osm_routes[rel_id]
+    rtags  = rel['properties']
 
-    ref    = rtags.get ('ref')
-    name   = rtags.get ('name:de', rtags.get ('name'))
-    ref_gk = rtags.get ('ref:geokatalog', [])
-    if ref_gk:
-        ref_gk = ref_gk.split (';')
-
-    osm_mls = connect.osm_relation_as_multilinestring (rfull)
-    osm_mls = shapely.ops.transform (transformer.transform, osm_mls)
-
-    # Take of the osm route only what's inside South Tyrol because in geokatalog
-    # many routes are drawn only up to or little beyond the border.
-    osm_coords = []
-    splits = shapely.ops.split (osm_mls, boundary_south_tyrol_utm)
-    if len (splits) > 1:
-        # N.B.: This convoluted way is actually faster that filtering the
-        # points like: osm_coords = filter
-        # (boundary_south_tyrol_utm.contains, line.coords)
-        for l in splits:
-            n = len (l.coords)
-            if Point (l.coords[n // 2]).within (boundary_south_tyrol_utm):
-                osm_coords += l.coords
-    else:
-        for ls in osm_mls:
-            osm_coords += ls.coords
+    osm_mls = rel['geometry']
+    osm_coords = [ c for ls in osm_mls for c in ls.coords ]
 
     # search geokatalog for one or more routes that may be used to cover it
-    gk_coords = []
-    best_gk_match = None
+    matches = []
+    maybees = []
 
-    for mls in gk_tree.query (osm_mls):
-        props = mls.props
+    # try matching on metadata
+    # we need this because an OSM route can be matched by more than one GK routes
+    for gk_mls in gk_tree.query (osm_mls):
+        if gk_mls.intersects (osm_mls):
+            gk_id = gk_mls.id
+            gk_props = gk_routes[gk_id]['properties']
+            m = match_route (rtags, gk_props)
+            if m is None:
+                maybees.append (gk_mls)
+            if m:
+                matches.append (gk_mls)
 
-        gk_id   = str (props.get ('ID',         ''))
-        gk_ref  = str (props.get ('WEGENR',     ''))
-        gk_name = str (props.get ('ROUTENNAME', ''))
+    if not matches:
+        # get the best-matching geometry
+        min_d = 9999999
+        for gk_mls in maybees:
+            gk_coords = [ c for ls in gk_mls for c in ls.coords ]
+            d = _distance (osm_coords, gk_coords)
+            if d < min_d:
+                min_d = d
+                matches = [gk_mls]
 
-        # stitch the segments
-        if (gk_id in ref_gk) or (gk_ref == ref) or (gk_name == name):
-            best_gk_match = props
-            for ls in mls:
-                gk_coords += ls.coords
+    if not matches:
+        errors.append ((ERROR, 'Route not found in geokatalog.'))
+        return
 
-    if not best_gk_match:
-        errors.append ('  Route not found in geokatalog.')
-        return errors
+    gk_coords = [ c for mls in matches for ls in mls for c in ls.coords ]
 
     d = _distance (osm_coords, gk_coords)
     if d > 100:
-        errors.append ('  Not fully covered. Best match is {best} with error = {d:.0f}m'.format (
-            d = d, best = connect.format_gk_route (best_gk_match)))
+        errors.append ((ERROR, 'Not fully covered. Matched {matches} with error = {d:.0f}m'.format (
+            d = d, matches = '; '.join ([ connect.format_gk_route (gk_routes[m.id]['properties']) for m in matches]))))
+    elif errors:
+        # not an error but good to have in the report
+        errors.append ((ERROR, 'Fully covered by {matches}'.format (
+            matches = '; '.join ([ connect.format_gk_route (gk_routes[m.id]['properties']) for m in matches]))))
 
-    return errors
 
-
-def check_geokatalog_covered (gk_id):
+def check_geokatalog_covered (gk_id, errors):
     """For every chunk in the geokatalog route there must be a route in osm with
-    matching id, ref or name that covers it.
+    matching ref or name that covers it.
 
     This triggers if the osm route is too short.  It does not trigger if the osm
     route is too long.
 
     """
 
-    errors = []
-
-    gk_route = gk_routes[gk_id]
-    gk_mls   = gk_route['geometry']
-
-    props   = gk_route['properties']
-    gk_ref  = props.get ('WEGENR',     '')
-    gk_name = props.get ('ROUTENNAME', '')
+    gk_route  = gk_routes[gk_id]
+    gk_props  = gk_route['properties']
+    gk_mls    = gk_route['geometry']
+    gk_coords = [c for ls in gk_mls for c in ls.coords ]
+    if not gk_coords:
+        return
 
     found   = False
-    matched = False
     covered = False
-    min_d   = 9999999
-    best_osm_match = None
 
-    gk_coords = []
-    for ls in gk_mls:
-        gk_coords += ls.coords
+    matches = []
+    maybees = []
 
     # search osm for one or more routes that may be used to cover it
-    for osm_bbox in osm_tree.query (gk_mls):
-        rel_id = osm_bbox.id
-        rtags  = osm_bbox.props
+    # try matching on metadata
+    for osm_mls in osm_tree.query (gk_mls):
+        if gk_mls.intersects (osm_mls):
+            rel_id  = osm_mls.id
+            rel     = osm_routes[rel_id]
+            rtags   = rel['properties']
 
-        ref    = rtags.get ('ref')
-        name   = rtags.get ('name:de', rtags.get ('name'))
-        ref_gk = rtags.get ('ref:geokatalog')
+            m = match_route (rtags, gk_props)
+            if m is None:
+                maybees.append (osm_mls)
+            if m:
+                matches.append (osm_mls)
 
-        found  = True
+    if not matches:
+        # get the best-matching geometry
+        min_d = 9999999
+        for osm_mls in maybees:
+            rel_id  = osm_mls.id
+            rel     = osm_routes[rel_id]
+            rtags   = rel['properties']
 
-        if ref == gk_ref or ref_gk == gk_id or name == gk_name:
-            matched = True
-            # good candidate route
+            # osm_mls = rel['geometry']
+            found   = True
+
             # check if the osm route covers the geokatalog chunk
-
-            rfull = connect.api.RelationFull (rel_id)
-            osm_mls = connect.osm_relation_as_multilinestring (rfull)
-            osm_mls = shapely.ops.transform (transformer.transform, osm_mls)
-            osm_mls = resample (osm_mls, RESAMPLE)
-
-            osm_coords = []
-            for ls in osm_mls:
-                osm_coords += ls.coords
+            osm_coords = [ c for ls in osm_mls for c in ls.coords ]
+            if not osm_coords:
+                return
 
             d = _distance (gk_coords, osm_coords)
             if d < min_d:
-                best_osm_match = rfull[-1]['data']
                 min_d = d
-            if d < 100:
-                covered = True
-                break
+                matches = [osm_mls]
 
-    if not found:
-        errors.append ('  No osm route intersects it.')
-    elif not matched:
-        errors.append ('  No intersecting osm route matches with ref or name or ref:geokatalog.')
-    elif not covered:
-        errors.append ('  Not fully covered. Best match is {best} with error = {d:.0f}m'.format
-                       (d = min_d, best = connect.format_route (best_osm_match)))
-    if errors:
-        errors.insert (0, connect.format_gk_route (props))
+    if not matches:
+        errors.append ((ERROR, 'No intersecting osm route matches with ref or name.'))
+        return
 
-    return errors
+    osm_coords = [ c for mls in matches for ls in mls for c in ls.coords ]
+    d = _distance (gk_coords, osm_coords)
+
+    if d > 100:
+        errors.append ((ERROR, 'Not fully covered. Best match is {matches} with error = {d:.0f}m'.format
+                       (d = d, matches = '; '.join ([
+                           connect.format_route (osm_routes[osm_mls.id]['rfull'][-1]) for osm_mls in matches
+                       ]))))
