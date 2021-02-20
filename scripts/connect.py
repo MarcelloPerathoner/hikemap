@@ -33,7 +33,7 @@ CHUNKS = {
 """Expected no. of chunks for routes that for some reason have more than one
 chunk."""
 
-HIKING_TYPES = ('foot', 'hiking', 'abandoned:hiking', 'worship')
+HIKING_TYPES = ('foot', 'hiking', 'worship')
 """ Hiking route types. """
 
 CHECKED_TYPES = HIKING_TYPES + ('bicycle', 'mtb', 'piste', 'ski', 'bus', 'road')
@@ -61,10 +61,11 @@ def way_is_way (way, clip_exceptions = False):
     if clip_exceptions and 'geokatalog:exception' in wtags:
         return False
 
-    return wtags and ('highway'    in wtags or
-                      'railway'    in wtags or
-                      'aerialway'  in wtags or
-                      'piste:type' in wtags)
+    return wtags and ('highway'       in wtags or
+                      'razed:highway' in wtags or
+                      'railway'       in wtags or
+                      'aerialway'     in wtags or
+                      'piste:type'    in wtags)
 
 
 def way_is_area (way):
@@ -141,6 +142,7 @@ def relations_in_areas (area_ids, types = CHECKED_TYPES):
     ({areas})->.location;
     (
         relation["route"~"{types}"](area.location);
+        relation["abandoned:route"~"{types}"](area.location);
     );
     out ids;
     """.format (areas = areas, types = types)
@@ -154,23 +156,27 @@ def osm_relation_as_multilinestring (rfull, clip_exceptions = False):
     Optionally remove ways marked as exceptions.
     """
 
-    relation = rfull[-1]
+    try:
+        relation = rfull[-1]
 
-    nodes_dict = dict ([(n['id'], n) for n in rfull if n['type'] == 'node'])
-    ways_dict  = dict ([(w['id'], w) for w in rfull if w['type'] == 'way'])
+        nodes_dict = dict ([(n['id'], n) for n in rfull if n['type'] == 'node'])
+        ways_dict  = dict ([(w['id'], w) for w in rfull if w['type'] == 'way'])
 
-    ways = [ ways_dict[m['ref']] for m in relation['members'] if m['type'] == 'way' ]
+        ways = [ ways_dict[m['ref']] for m in relation['members'] if m['type'] == 'way' ]
 
-    lines = []
-    for way in ways:
-        if way_is_way (way, clip_exceptions):
-            nodes = way['nodes']
-            lines.append (LineString ([ (nodes_dict[n]['lon'], nodes_dict[n]['lat']) for n in nodes ]))
+        lines = []
+        for way in ways:
+            if way_is_way (way, clip_exceptions):
+                nodes = way['nodes']
+                lines.append (LineString ([ (nodes_dict[n]['lon'], nodes_dict[n]['lat']) for n in nodes ]))
 
-    mls = shapely.ops.linemerge (lines)
-    if mls.type == 'LineString':
-        return MultiLineString ([mls])
-    return mls
+        mls = shapely.ops.linemerge (lines)
+        if mls.type == 'LineString':
+            return MultiLineString ([mls])
+        return mls
+    except KeyError:
+        log (ERROR, "KeyError in relation %s" % format_route (relation))
+        raise
 
 
 def get_area (area_id):
@@ -219,7 +225,8 @@ def init ():
     connect.log = logging.getLogger ().log
     connect.api = osmapi.OsmApi (passwordfile = Path ("~/.osmpass").expanduser ())
 
-    area_ids = BOUNDARY_ST + tuple (sys.args.areas)
+    # area_ids = BOUNDARY_ST + tuple (sys.args.areas)
+    area_ids = tuple (sys.args.areas)
     with Pool () as p:
         polys = list (tqdm (
             p.imap (get_area, area_ids),
@@ -228,5 +235,5 @@ def init ():
         ))
 
     polys = [p for sublist in polys for p in sublist] # flatten list of lists
-    connect.boundary_south_tyrol = polys.pop (0)
+    # connect.boundary_south_tyrol = polys.pop (0)
     connect.boundary = shapely.ops.unary_union (polys)

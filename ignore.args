@@ -2,6 +2,7 @@
    38304 # E66
    66701 # Bus 102 Trento Cavalese
   113579 # Bus 101 Trento Penia
+  140401 # E504
   186221 # 03 Südalpenweg
   949981 # B100 Drautal Straße
  1116678 # ÖAV 471
@@ -11,6 +12,7 @@
  1736379 # Traumpfad München-Venedig
  1753217 # Strada Statale 51 di Alemagna (Tratto ANAS)
  1754080 # Strada Provinciale 49 di Misurina
+ 2328870 # Cortina 6
  2460773 # Ciclovia del Sole
  2759974 # EuroVelo 7 - Sun Route - part Italy 1
  2770634 # EuroVelo 7 - Sun Route - part Austria
@@ -55,19 +57,18 @@
  9437528
  9440628
  9441085
- 9450633
- 9450646
  9492303
  9876962
 10399914
 10443552
+11094256 # AV9 (not in GK)
+11860429 # Roda dles Viles
 11270235 # "Passeggiata del Rio Tigia - Titschenbachpromenade"
 11270309 # "Passeggiata delle Sorgenti - Quellenpromenade"
 11322144
 11755635
+12103681 # Tru di Pra
 12150790 # "Giro dei Capitelli - Kapellenrunde"
-
-3562051 # Hike 5 160m Umweg wegen Bauarbeiten
 
 --gk-warn
 516
@@ -76,6 +77,5 @@ Pinatzweg
 Bürgstallstöckl
 Almenrundweg
 Karnischer Höhenweg
-Dolomiten Höhenweg
 Europäischer Fernwanderweg
 ...

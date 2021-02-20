@@ -9,7 +9,8 @@ Checks:
 - oneways in cycle and bus routes,
 - and correct order of stops in bus routes.
 
-Also can compare OSM hiking routes against their counterpart in `geokatalog.provinz.bz.it`.
+Also can compare OSM hiking routes geometry against their counterpart in
+`geokatalog.provinz.bz.it`.
 
 """
 
@@ -22,50 +23,56 @@ import operator
 import json
 import re
 import sys
+import traceback
 
 import connect
-import hausdorff as hd
+import geokatalog
 
 
-def check_osmc_symbol (rtags):
-    sym = rtags.get ('osmc:symbol')
+def get_route_type (rtags):
+    return rtags.get (rtags.get ('type', ''))
+
+
+def check_osmc_symbol (rtags, errors):
+    sym = rtags.get ('osmc:symbol', '')
     ref = rtags.get ('ref')
-    errors = []
 
-    if sym:
-        m = re.match (r'^(.*?):red:white_', sym)
-        if m and m.group (1) != 'red':
-            errors.append ((ERROR, '  Bogus osmc:symbol {sym}'.format (sym = sym)))
+    m = re.match (r'^(.*?):red:white_', sym)
+    if m and m.group (1) != 'red':
+        errors.append ((ERROR, '  Bogus osmc:symbol {sym}'.format (sym = sym)))
 
-        if ref:
-            rx = ':%s:' % ref
+    if ref:
+        rx = ':%s:' % ref
 
-            m = re.match (r'([0-9]{1,2}[ABC]?)$', ref)
-            if m:
-                rx = '^red:red:white_bar:%s:black$' % m.group (1)
+        m = re.match (r'([0-9]{1,2}[ABC]?)$', ref)
+        if m:
+            rx = '^red:red:white_bar:%s:black$' % m.group (1)
 
-            m = re.match (r'E([0-9]{3}[ABC]?)$', ref)
-            if m:
-                rx = '^red:red:white_stripe:%s:black$' % m.group (1)
+        m = re.match (r'E([0-9]{3}[ABC]?)$', ref) # Trentino Est
+        if m:
+            rx = '^red:red:white_stripe:%s:black$' % m.group (1)
 
-            m = re.match (r'AV([0-9])$', ref)
-            if m:
-                rx = '^red::blue_triangle_line:%s:blue$' % m.group (1)
+        m = re.match (r'AV([0-9])$', ref) # Alta Via
+        if m:
+            rx = '^red::blue_triangle_line:%s:blue$' % m.group (1)
 
-            m = re.match (r'VA-([A-Z][0-9]+)$', ref)
-            if m:
-                rx = '^red::gray_triangle:V:blue$'
+        m = re.match (r'E([1-9])$', ref) # Europaweg E5
+        if m:
+            rx = '^red:red:white_bar$'
 
-            if not re.search (rx, sym):
-                errors.append ((ERROR, '  Ref {ref} and osmc:symbol {sym} mismatch.'.format (ref = ref, sym = sym)))
-                # errors.append ('  rx = {rx}'.format (rx = rx))
+        m = re.match (r'VA-([A-Z][0-9]+)$', ref) # Via Alpina
+        if m:
+            rx = '^red::gray_triangle:V:blue$'
 
-    return errors
+        m = re.match (r'SI', ref)
+        if m:
+            rx = None
+
+        if rx and not re.search (rx, sym):
+            errors.append ((ERROR, '  Ref {ref} and osmc:symbol {sym} mismatch.'.format (ref = ref, sym = sym)))
 
 
-def check_stop_tags (stops):
-    errors = []
-
+def check_stop_tags (stops, errors):
     for stop in stops:
         stags = stop['tags']
 
@@ -73,13 +80,10 @@ def check_stop_tags (stops):
         if pt != 'stop_position':
             errors.append ((ERROR, '  Stop {id} is missing tags.'.format (id = stop['id'])))
 
-    return errors
 
-
-def check_network (rtags):
-    route = rtags['route']
+def check_network (rtags, errors):
+    route = get_route_type (rtags)
     network = rtags.get ('network')
-    errors = []
 
     rx = None
     if route in connect.HIKING_TYPES:
@@ -95,14 +99,21 @@ def check_network (rtags):
             if not m:
                 errors.append ((ERROR, '  Bogus network {nw} in route'.format (nw = network)))
 
-    return errors
+
+def check_name (rtags, errors):
+    route = get_route_type (rtags)
+    name = rtags.get ('name')
+    if name and route in connect.HIKING_TYPES:
+        m = re.search (r'^\d+\w?$', name)
+        if m:
+            errors.append ((ERROR, '  Bogus name {name} in route'.format (name = name)))
 
 
 def ways_ok (rfull, ways, stops = [], direction = ''):
     relation = rfull[-1]
 
     rtags  = relation['tags']
-    route  = rtags['route']
+    route = get_route_type (rtags)
     rel_id = relation['id']
     expected_chunks = connect.CHUNKS.get (rel_id, 1)
 
@@ -229,16 +240,15 @@ def ways_ok (rfull, ways, stops = [], direction = ''):
     return error_msgs, chunks
 
 
-def route_ok (rfull):
+def check_route (rfull, errors):
     relation = rfull[-1]
     rtags    = relation['tags']
-    route    = rtags['route']
+    route    = get_route_type (rtags)
     members  = relation['members']
 
-    errors = []
-
-    errors += check_osmc_symbol (rtags)
-    errors += check_network (rtags)
+    check_osmc_symbol (rtags, errors)
+    check_network (rtags, errors)
+    check_name (rtags, errors)
 
     ways_dict = dict ([(w['id'], w) for w in rfull if w['type'] == 'way'])
 
@@ -262,12 +272,10 @@ def route_ok (rfull):
                       if n['type'] == 'node' and n['role'] in ('stop', 'stop_exit_only', 'stop_entry_only') ]
             err, chunks = ways_ok (rfull, ways, stops)
             errors += err
-            errors += check_stop_tags (stops)
+            check_stop_tags (stops, errors)
         else:
             err, chunks = ways_ok (rfull, ways, [])
             errors += err
-
-    return errors
 
 
 class Formatter (logging.Formatter):
@@ -386,7 +394,7 @@ if __name__ == '__main__':
     osm_relations = connect.relations_in_areas (sys.args.areas, sys.args.routes)
     log (INFO, 'got %d route relations from overpass' % len (osm_relations))
 
-    hd.init (osm_relations, sys.args.geokatalog)
+    geokatalog.init (osm_relations, sys.args.geokatalog)
 
     log (INFO, 'start checking OSM routes')
 
@@ -397,7 +405,7 @@ if __name__ == '__main__':
         rtags = i[1]['rfull'][-1]['tags']
         return connect.natural_sort (rtags.get ('ref', rtags.get ('name', '')))
 
-    for rel_id, data in sorted (hd.osm_routes.items (), key = osm_route_key):
+    for rel_id, osm_route in sorted (geokatalog.osm_routes.items (), key = osm_route_key):
         log (DEBUG, 'checking OSM route %s' % rel_id)
 
         errors = []
@@ -405,39 +413,42 @@ if __name__ == '__main__':
             continue
 
         try:
-            rfull = data['rfull']
+            rfull = osm_route['rfull']
             relation = rfull[-1]
             rtags = relation['tags']
             context = connect.format_route (relation)
 
-            route = rtags['route']
+            route = get_route_type (rtags)
             if route not in connect.CHECKED_TYPES:
                 continue
 
             fixme = rtags.get ('fixme')
             if fixme:
-                errors.append ((ERROR, '%s - fixme: %s' % (context, fixme)))
+                errors.append ((WARN, 'fixme: %s' % fixme))
 
-            errors += route_ok (rfull)
+            check_route (rfull, errors)
             checked_relations += 1
 
             # check against geokatalog
 
             if (sys.args.geokatalog
+                and rtags['type'] == 'route'  # not abandoned etc.
                 and route in connect.HIKING_TYPES
-                and not re.match (r'AV|E|SI|VA', rtags.get ('ref', ''))
+                and 'buffered' in osm_route
+                and not re.match (r'E|SI|VA', rtags.get ('ref', ''))
                 and not 'via_ferrata_scale' in rtags
                 and not rtags.get ('hiking') == 'via_ferrata'):
 
-                hd.check_osm_covered (rel_id, errors)
+                geokatalog.check_osm_covered (rel_id, errors)
 
             if errors:
-                level = WARN if rel_id in sys.args.osm_warn else ERROR
                 for level, error in errors:
+                    if level == ERROR and rel_id in sys.args.osm_warn:
+                        level = WARN
                     log (level, "%s - %s" % (context, error))
 
         except Exception as e:
-            print (e)
+            traceback.print_exc (file=sys.stdout)
 
     log (INFO, 'Checked relations: %d' % checked_relations)
     log (INFO, 'Faulty relations:  %d' % len (faulty_relations))
@@ -451,17 +462,19 @@ if __name__ == '__main__':
         props = i[1]['properties']
         return connect.natural_sort (props.get ('WEGENR', props.get ('ROUTENNAME', '')))
 
-    for gk_id, gk_item in sorted (hd.gk_routes.items (), key = gk_route_key):
+    for gk_id, gk_route in sorted (geokatalog.gk_routes.items (), key = gk_route_key):
         errors = []
-        hd.check_geokatalog_covered (gk_id, errors)
+        if 'buffered' in gk_route:
+            geokatalog.check_geokatalog_covered (gk_id, errors)
         if errors:
-            gk_props = gk_item['properties']
+            gk_props = gk_route['properties']
             gk_ref   = gk_props.get ('WEGENR',     '')
             gk_name  = gk_props.get ('ROUTENNAME', '')
 
-            level = WARN if (gk_name in sys.args.gk_warn or gk_ref in sys.args.gk_warn) else ERROR
             context = connect.format_gk_route (gk_props)
             for level, error in errors:
+                if level == ERROR and (gk_name in sys.args.gk_warn or gk_ref in sys.args.gk_warn):
+                    level = WARN
                 log (level, "%s - %s" % (context, error))
 
     log (INFO, 'Done')

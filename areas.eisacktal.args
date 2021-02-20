@@ -1,7 +1,5 @@
 --areas
-
 6536796 # Eisacktal
 
 --geokatalog
-data/hiking-trails-center.geojson
-data/hiking-trails-east.geojson
+data/hiking-trails-eisacktal.geojson
