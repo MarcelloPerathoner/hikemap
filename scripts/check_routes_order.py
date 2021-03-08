@@ -48,7 +48,7 @@ def check_osmc_symbol (rtags, errors):
         if m:
             rx = '^red:red:white_bar:%s:black$' % m.group (1)
 
-        m = re.match (r'E([0-9]{3}[ABC]?)$', ref) # Trentino Est
+        m = re.match (r'(?:E|O)([0-9]{3}[ABC]?)$', ref) # Trentino Est / Ovest
         if m:
             rx = '^red:red:white_stripe:%s:black$' % m.group (1)
 
@@ -346,15 +346,15 @@ def build_parser ():
     parser.add_argument ('-g', '--geokatalog', nargs='*',
                          metavar='path/to/geokatalog.geojson',
                          help="load geokatalog geojson file")
-    parser.add_argument ('--osm-ignore', nargs='*', type=int, dest='osm_ignore',
+    parser.add_argument ('--osm-ignore', nargs="*", type=int, dest='osm_ignore', action='extend',
                          metavar='OSM_RELID',
                          default = [],
                          help="ignore these OSM routes")
-    parser.add_argument ('--osm-warn', nargs='*', type=int, dest='osm_warn',
+    parser.add_argument ('--osm-warn', nargs='*', type=int, dest='osm_warn', action='extend',
                          metavar='OSM_RELID',
                          default = [],
                          help="convert errors into warnings for these OSM routes")
-    parser.add_argument ('--gk-warn', nargs='*', dest='gk_warn',
+    parser.add_argument ('--gk-warn', nargs='*', dest='gk_warn', action='extend',
                          metavar='GEOKATALOG_ID',
                          default = [],
                          help="convert errors into warnings for these geokatalog routes")
@@ -435,7 +435,7 @@ if __name__ == '__main__':
                 and rtags['type'] == 'route'  # not abandoned etc.
                 and route in connect.HIKING_TYPES
                 and 'buffered' in osm_route
-                and not re.match (r'E|SI|VA', rtags.get ('ref', ''))
+                and not re.match (r'E|O|SI|VA', rtags.get ('ref', ''))
                 and not 'via_ferrata_scale' in rtags
                 and not rtags.get ('hiking') == 'via_ferrata'):
 

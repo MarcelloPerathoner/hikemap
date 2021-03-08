@@ -1,0 +1,19 @@
+--areas
+6536736 # Überetsch-Unterland
+  47207 # Bozen
+
+--geokatalog
+data/hiking-trails-unterland.geojson
+
+--osm-ignore
+ 3182798 # Boymont
+ 2172730 # Katzenleiter
+ 1524702 # O500
+ 7077998 # O502A
+ 6899726 # SI C06
+10551322 # Weinlehrpfad (Sallegg)
+
+--gk-warn
+502
+513
+Trimm dich Pfad

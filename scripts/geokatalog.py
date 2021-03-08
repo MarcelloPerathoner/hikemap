@@ -49,7 +49,6 @@ total = 0
 matched = 0
 
 BUFFER   = 100.0
-# RESAMPLE = 100.0
 
 # SRS_BZIT = EPSG:25832    # ETRS89 / UTM zone 32N used by provinz.bz.it
 # SRS_WGS  = EPSG:4326     # WGS84
@@ -59,69 +58,6 @@ BUFFER   = 100.0
 # we transform both into an UTM projection, that allows easy distance calculations
 transformer  = Transformer.from_crs ("EPSG:4326", "EPSG:25832", always_xy = True)
 itransformer = Transformer.from_crs ("EPSG:25832", "EPSG:4326", always_xy = True)
-
-# def dist (a, b):
-#     """ Since we are using UTM we can use a simple euclidean distance. """
-#     return math.sqrt ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
-
-
-# def _distance (coords1, coords2):
-#     """ Return Hausdorff distance in m """
-
-#     hd1 = scipy.spatial.distance.directed_hausdorff (coords1, coords2)
-
-#     # hd2 = scipy.spatial.distance.directed_hausdorff (coords2, coords1)
-#     # hd = max (hd1[0], hd2[0])
-
-#     a = coords1[hd1[1]]
-#     b = coords2[hd1[2]]
-#     return dist (a, b)
-
-
-# def coords (geom):
-#     if geom.is_empty:
-#         return []
-#     if geom.type in ('LineString', 'LinearRing'):
-#         return geom.coords
-#     if geom.type.startswith ('Multi') or geom.type == 'GeometryCollection':
-#         return [c for l in geom for c in l.coords ]
-#     return []
-
-
-# def resample (geom, threshold):
-#     """Resample the linestrings in geometry.
-
-#     After resampling the distance between consecutive points in a linestring
-#     will be no longer than threshold.
-
-#     """
-
-#     if geom.is_empty:
-#         return geom
-
-#     if geom.type in ('LineString', 'LinearRing'):
-#         pts = []
-#         last_pt = geom.coords[0]
-
-#         for pt in geom.coords:
-#             d = dist (pt, last_pt)
-#             if d > threshold:
-#                 # add some points in between
-#                 long_line = LineString ([last_pt, pt])
-#                 i = threshold
-#                 while i <= d:
-#                     pts.append (long_line.interpolate (i))
-#                     i += threshold
-#             pts.append (pt)
-#             last_pt = pt
-
-#         return type (geom) (pts)
-
-#     elif geom.type.startswith ('Multi') or geom.type == 'GeometryCollection':
-#         return type (geom) ([ resample (part, threshold) for part in geom.geoms])
-
-#     return geom
-
 
 gk_routes  = dict ()
 osm_routes = dict ()
@@ -154,7 +90,7 @@ def match_route (rtags, gk_props):
         return True
 
     # special case for CAI Trentino Est
-    m = re.match (r'^E(\d\d\d)$', ref)
+    m = re.match (r'^(?:E|O)([0-9]{3}[ABC]?)$', ref)
     if m and gk_ref == m.group (1):
         return True
 
@@ -186,7 +122,6 @@ def get_relation (osm_relation):
 
         geom = connect.osm_relation_as_multilinestring (rfull)
         geom = shapely.ops.transform (transformer.transform, geom)
-        # geom = resample (geom, RESAMPLE)
 
         res['geometry'] = geom
         res['geometry'].id = rel_id
@@ -194,7 +129,6 @@ def get_relation (osm_relation):
         clipped = connect.osm_relation_as_multilinestring (rfull, True)
         clipped = shapely.ops.transform (transformer.transform, clipped)
 
-        # clipped = resample (clipped, RESAMPLE)
         clipped = clip_area (clipped)
 
         if not clipped.is_empty:

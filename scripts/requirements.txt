@@ -1,0 +1,4 @@
+pyproj
+requests
+shapely
+tqdm

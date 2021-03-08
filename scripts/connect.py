@@ -9,7 +9,7 @@ import sys
 from multiprocessing import Pool
 
 import requests
-import osmapi
+# import osmapi
 
 import shapely.ops
 from shapely.geometry import MultiLineString, LineString, MultiPoint, Point, MultiPolygon, Polygon, LinearRing, box
@@ -20,10 +20,6 @@ from tqdm import tqdm
 connect = sys.modules[__name__] # pseudo-import this module
 
 MY_UID = 8199540
-
-BOUNDARY_ST = (
-    47046, # South Tyrol
-)
 
 CHUNKS = {
      934999 : 2, # Hike: "Sentiero Europeo E5, Italia", Gap @ Bolzano
@@ -39,6 +35,8 @@ HIKING_TYPES = ('foot', 'hiking', 'worship')
 CHECKED_TYPES = HIKING_TYPES + ('bicycle', 'mtb', 'piste', 'ski', 'bus', 'road')
 """ Route types we check. """
 
+DISUSED_TYPES = ('disused', 'abandoned', 'rased')
+
 
 # Transform a string so that numbers in the string sort naturally.
 #
@@ -53,6 +51,17 @@ def natural_sort (s):
         return str (len (s)) + s
     return re.sub ('\d+', f, s)
 
+WAY_TAGS = set ((
+    'highway',
+    'disused:highway',
+    'abandoned:highway',
+    'demolished:highway',
+    'removed:highway',
+    'razed:highway',
+    'railway',
+    'aerialway',
+    'piste:type',
+))
 
 def way_is_way (way, clip_exceptions = False):
     # only consider these kinds of ways
@@ -61,11 +70,7 @@ def way_is_way (way, clip_exceptions = False):
     if clip_exceptions and 'geokatalog:exception' in wtags:
         return False
 
-    return wtags and ('highway'       in wtags or
-                      'razed:highway' in wtags or
-                      'railway'       in wtags or
-                      'aerialway'     in wtags or
-                      'piste:type'    in wtags)
+    return wtags and WAY_TAGS.intersection (wtags.keys ())
 
 
 def way_is_area (way):
@@ -223,9 +228,7 @@ def relation_full (rel_id):
 
 def init ():
     connect.log = logging.getLogger ().log
-    connect.api = osmapi.OsmApi (passwordfile = Path ("~/.osmpass").expanduser ())
 
-    # area_ids = BOUNDARY_ST + tuple (sys.args.areas)
     area_ids = tuple (sys.args.areas)
     with Pool () as p:
         polys = list (tqdm (
@@ -235,5 +238,4 @@ def init ():
         ))
 
     polys = [p for sublist in polys for p in sublist] # flatten list of lists
-    # connect.boundary_south_tyrol = polys.pop (0)
     connect.boundary = shapely.ops.unary_union (polys)

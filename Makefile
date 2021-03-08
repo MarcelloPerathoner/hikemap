@@ -203,6 +203,7 @@ data: data/hiking-trails.geojson       			\
 	data/hiking-trails-eisacktal.geojson  		\
 	data/hiking-trails-pustertal.geojson    	\
 	data/hiking-trails-salten-schlern.geojson	\
+	data/hiking-trails-unterland.geojson    	\
 	data/mtb-tours.json            		\
 	data/bicycle-lanes.json        		\
 	data/ski-pistes.json           		\
@@ -216,6 +217,9 @@ data/hiking-trails.geojson: downloadService/HikingTrails.geojson
 data/hiking-trails-%.geojson: downloadService/HikingTrails.geojson data/%.extent
 	$(RM) $@
 	$(OGR2_BASE) -spat $(file < data/$*.extent) -nlt LINESTRING $@ $<
+
+# write extent files with:
+# scripts/check_routes_order.py -a 6536736 --write-areas-bbox data/unterland.extent
 
 # get SkiPistes manually from http://geokatalog.buergernetz.bz.it/geokatalog/
 # use this as data layer in JOSM
